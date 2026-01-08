@@ -930,6 +930,36 @@ if not st.session_state.calculation_df.empty:
     if 'unit_price_display' in edited_df.columns:
         edited_df['unit_price'] = edited_df['unit_price_display'].apply(parse_german_number)
     
+    # Ensure price_factor exists and recalculate total_price
+    if 'price_factor' not in edited_df.columns:
+        edited_df['price_factor'] = 1.0
+    edited_df['quantity'] = pd.to_numeric(edited_df['quantity'], errors='coerce').fillna(0)
+    edited_df['unit_price'] = pd.to_numeric(edited_df['unit_price'], errors='coerce').fillna(0)
+    edited_df['price_factor'] = pd.to_numeric(edited_df['price_factor'], errors='coerce').fillna(1.0)
+    edited_df['total_price'] = edited_df['quantity'] * edited_df['unit_price'] * edited_df['price_factor']
+    
+    # Check if data has changed (comparing key columns)
+    old_df = st.session_state.calculation_df
+    data_changed = False
+    
+    if len(edited_df) != len(old_df):
+        data_changed = True
+    else:
+        # Compare quantities and unit prices
+        for idx in range(len(edited_df)):
+            if idx < len(old_df):
+                if (edited_df.iloc[idx]['quantity'] != old_df.iloc[idx]['quantity'] or
+                    edited_df.iloc[idx]['unit_price'] != old_df.iloc[idx]['unit_price']):
+                    data_changed = True
+                    break
+    
+    # Update session state with edited values
+    st.session_state.calculation_df = edited_df
+    
+    # If data changed, trigger rerun to update display
+    if data_changed:
+        st.rerun()
+    
     # Price multiplier with enhanced UI
     st.markdown("")
     st.markdown("**🔢 Preisanpassung - Alle Preise auf einmal ändern**")
@@ -958,22 +988,13 @@ if not st.session_state.calculation_df.empty:
         st.markdown("<div style='margin-top: 28px;'>", unsafe_allow_html=True)
         if st.button("✅ Anwenden", use_container_width=True, type="primary"):
             # Update price_factor instead of unit_price
-            edited_df['price_factor'] = price_multiplier
-            st.session_state.calculation_df = edited_df
+            st.session_state.calculation_df['price_factor'] = price_multiplier
             st.session_state.price_factor = price_multiplier
             st.success(f"✅ Preisfaktor {price_multiplier} angewendet! EP bleibt unverändert, GP wurde angepasst.")
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
     
-    # Calculate totals
-    edited_df["quantity"] = pd.to_numeric(edited_df["quantity"], errors='coerce').fillna(0)
-    edited_df["unit_price"] = pd.to_numeric(edited_df["unit_price"], errors='coerce').fillna(0)
-    # Ensure price_factor exists
-    if 'price_factor' not in edited_df.columns:
-        edited_df['price_factor'] = 1.0
-    edited_df["price_factor"] = pd.to_numeric(edited_df["price_factor"], errors='coerce').fillna(1.0)
-    # Total includes the price factor
-    edited_df["total_price"] = edited_df["quantity"] * edited_df["unit_price"] * edited_df["price_factor"]
+    # Calculate totals (already calculated in edited_df above, just sum them)
     
     total_netto = edited_df["total_price"].sum()
     total_mwst = total_netto * 0.19
@@ -1066,126 +1087,143 @@ if not st.session_state.calculation_df.empty:
             except Exception as e:
                 st.error(f"❌ Fehler beim Erstellen der Ordnerstruktur: {str(e)}")
     
-    st.markdown("---")
     
     # Step 3: Export
     st.markdown("---")
     st.subheader("📥 Schritt 3: Angebot exportieren")
     
-    st.markdown("Geben Sie einen Projektnamen ein und wählen Sie das gewünschte Exportformat.")
-    project_name = st.text_input(
-        "📝 Projektname:",
-        value=st.session_state.project_name,
-        key="project_name_input",
-        help="Dieser Name erscheint in allen exportierten Dokumenten",
-        placeholder="z.B. Neubau Einfamilienhaus",
-        on_change=lambda: setattr(st.session_state, 'project_name', st.session_state.project_name_input)
-    )
-    # Update session state with current value
-    st.session_state.project_name = project_name
+    st.markdown("Dateien werden automatisch im angegebenen Speicherort mit dem Projektnamen gespeichert.")
+    
+    # Get export location and filename from folder generator section
+    export_folder = st.session_state.get('folder_location', os.path.expanduser("~\\Desktop"))
+    export_filename_base = st.session_state.get('folder_name_input', st.session_state.project_name)
     
     st.markdown("")
     col1, col2 = st.columns(2)
     
     with col1:
         # Excel Export with proper German number formatting
-        excel_buffer = io.BytesIO()
+        if st.button("💾 Excel speichern", use_container_width=True, type="primary"):
+            try:
+                # Check if export folder exists
+                if not os.path.exists(export_folder):
+                    st.error(f"❌ Der Speicherort existiert nicht: {export_folder}")
+                else:
+                    excel_buffer = io.BytesIO()
 
-        # Prepare export dataframe with German-formatted text
-        export_df = edited_df[['pos', 'description', 'quantity', 'unit', 'unit_price']].copy()
-        # Calculate GP with price factor
-        if 'price_factor' in edited_df.columns:
-            export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price'] * edited_df['price_factor']
-        else:
-            export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price']
+                    # Prepare export dataframe with German-formatted text
+                    export_df = edited_df[['pos', 'description', 'quantity', 'unit', 'unit_price']].copy()
+                    # Calculate GP with price factor
+                    if 'price_factor' in edited_df.columns:
+                        export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price'] * edited_df['price_factor']
+                    else:
+                        export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price']
 
-        # Convert numeric columns to German-formatted text strings
-        # This ensures copy-paste preserves the German format
-        export_df['quantity'] = export_df['quantity'].apply(lambda x: format_german_number(x, 2))
-        export_df['unit_price'] = export_df['unit_price'].apply(lambda x: format_german_number(x, 2))
-        export_df['total_price'] = export_df['total_price'].apply(lambda x: format_german_number(x, 2))
+                    # Convert numeric columns to German-formatted text strings
+                    # This ensures copy-paste preserves the German format
+                    export_df['quantity'] = export_df['quantity'].apply(lambda x: format_german_number(x, 2))
+                    export_df['unit_price'] = export_df['unit_price'].apply(lambda x: format_german_number(x, 2))
+                    export_df['total_price'] = export_df['total_price'].apply(lambda x: format_german_number(x, 2))
 
-        # Rename columns to German
-        export_df.columns = ['Pos.', 'Leistungsbezeichnung', 'Menge', 'Einheit', 'EP netto (€)', 'GP netto (€)']
+                    # Rename columns to German
+                    export_df.columns = ['Pos.', 'Leistungsbezeichnung', 'Menge', 'Einheit', 'EP netto (€)', 'GP netto (€)']
 
-        # Write to Excel
-        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            export_df.to_excel(writer, index=False, sheet_name='Kalkulation')
+                    # Write to Excel
+                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                        export_df.to_excel(writer, index=False, sheet_name='Kalkulation')
 
-            # Get the worksheet for styling
-            worksheet = writer.sheets['Kalkulation']
+                        # Get the worksheet for styling
+                        worksheet = writer.sheets['Kalkulation']
 
-            # Clean up values and set as text - remove any leading apostrophes
-            from openpyxl.styles import Alignment
-            from openpyxl.cell.cell import TYPE_STRING
+                        # Clean up values and set as text - remove any leading apostrophes
+                        from openpyxl.styles import Alignment
+                        from openpyxl.cell.cell import TYPE_STRING
 
-            for row in range(2, len(export_df) + 2):
-                # Menge (column C/3) - Clean value and set as text
-                cell_c = worksheet.cell(row=row, column=3)
-                # Remove leading apostrophe if exists
-                clean_value_c = str(cell_c.value).lstrip("'") if cell_c.value else ""
-                cell_c.value = clean_value_c
-                cell_c.data_type = TYPE_STRING
-                cell_c.alignment = Alignment(horizontal='right')
+                        for row in range(2, len(export_df) + 2):
+                            # Menge (column C/3) - Clean value and set as text
+                            cell_c = worksheet.cell(row=row, column=3)
+                            # Remove leading apostrophe if exists
+                            clean_value_c = str(cell_c.value).lstrip("'") if cell_c.value else ""
+                            cell_c.value = clean_value_c
+                            cell_c.data_type = TYPE_STRING
+                            cell_c.alignment = Alignment(horizontal='right')
 
-                # EP netto (column E/5) - Clean value and set as text
-                cell_e = worksheet.cell(row=row, column=5)
-                clean_value_e = str(cell_e.value).lstrip("'") if cell_e.value else ""
-                cell_e.value = clean_value_e
-                cell_e.data_type = TYPE_STRING
-                cell_e.alignment = Alignment(horizontal='right')
+                            # EP netto (column E/5) - Clean value and set as text
+                            cell_e = worksheet.cell(row=row, column=5)
+                            clean_value_e = str(cell_e.value).lstrip("'") if cell_e.value else ""
+                            cell_e.value = clean_value_e
+                            cell_e.data_type = TYPE_STRING
+                            cell_e.alignment = Alignment(horizontal='right')
 
-                # GP netto (column F/6) - Clean value and set as text
-                cell_f = worksheet.cell(row=row, column=6)
-                clean_value_f = str(cell_f.value).lstrip("'") if cell_f.value else ""
-                cell_f.value = clean_value_f
-                cell_f.data_type = TYPE_STRING
-                cell_f.alignment = Alignment(horizontal='right')
+                            # GP netto (column F/6) - Clean value and set as text
+                            cell_f = worksheet.cell(row=row, column=6)
+                            clean_value_f = str(cell_f.value).lstrip("'") if cell_f.value else ""
+                            cell_f.value = clean_value_f
+                            cell_f.data_type = TYPE_STRING
+                            cell_f.alignment = Alignment(horizontal='right')
 
-            # Adjust column widths for better readability
-            worksheet.column_dimensions['A'].width = 12  # Pos.
-            worksheet.column_dimensions['B'].width = 50  # Leistungsbezeichnung
-            worksheet.column_dimensions['C'].width = 15  # Menge
-            worksheet.column_dimensions['D'].width = 10  # Einheit
-            worksheet.column_dimensions['E'].width = 18  # EP netto
-            worksheet.column_dimensions['F'].width = 18  # GP netto
-        
-        # Sanitize project name for filename
-        safe_project_name = sanitize_filename(project_name)
-        
-        st.download_button(
-            label="📊 Excel herunterladen",
-            data=excel_buffer.getvalue(),
-            file_name=f"Kalkulation_{safe_project_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            help="Excel-Datei mit EP (Original-KI-Preis) und GP (mit Faktor berechnet)"
-        )
+                        # Adjust column widths for better readability
+                        worksheet.column_dimensions['A'].width = 12  # Pos.
+                        worksheet.column_dimensions['B'].width = 50  # Leistungsbezeichnung
+                        worksheet.column_dimensions['C'].width = 15  # Menge
+                        worksheet.column_dimensions['D'].width = 10  # Einheit
+                        worksheet.column_dimensions['E'].width = 18  # EP netto
+                        worksheet.column_dimensions['F'].width = 18  # GP netto
+                    
+                    # Sanitize filename
+                    safe_filename = sanitize_filename(export_filename_base)
+                    
+                    # Create full file path
+                    excel_filename = f"Kalkulation_{safe_filename}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+                    excel_filepath = os.path.join(export_folder, excel_filename)
+                    
+                    # Write to file
+                    with open(excel_filepath, 'wb') as f:
+                        f.write(excel_buffer.getvalue())
+                    
+                    st.success(f"✅ **Excel gespeichert!**")
+                    st.info(f"📂 Speicherort: `{excel_filepath}`")
+                    
+            except PermissionError:
+                st.error(f"❌ Keine Berechtigung zum Schreiben in: {export_folder}")
+            except Exception as e:
+                st.error(f"❌ Excel-Fehler: {str(e)}")
     
     with col2:
         # PDF Export
-        if st.button("📄 PDF generieren", use_container_width=True, type="primary"):
-            with st.spinner("Erstelle PDF..."):
-                try:
-                    # Prepare dataframe for PDF with calculated total prices
-                    pdf_df = edited_df.copy()
-                    if 'price_factor' in pdf_df.columns:
-                        pdf_df['total_price'] = pdf_df['quantity'] * pdf_df['unit_price'] * pdf_df['price_factor']
-                    pdf_bytes = generate_offer_pdf(pdf_df, project_name)
-                    
-                    # Sanitize project name for filename
-                    safe_project_name = sanitize_filename(project_name)
-                    
-                    st.download_button(
-                        label="⬇️ PDF herunterladen",
-                        data=pdf_bytes,
-                        file_name=f"Angebot_{safe_project_name}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                        help="PDF-Angebot mit Original-EP und berechneten GP-Werten"
-                    )
-                except Exception as e:
-                    st.error(f"PDF-Fehler: {str(e)}")
+        if st.button("� PDF speichern", use_container_width=True, type="primary"):
+            # Check if export folder exists
+            if not os.path.exists(export_folder):
+                st.error(f"❌ Der Speicherort existiert nicht: {export_folder}")
+            else:
+                with st.spinner("Erstelle PDF..."):
+                    try:
+                        # Prepare dataframe for PDF with calculated total prices
+                        pdf_df = edited_df.copy()
+                        if 'price_factor' in pdf_df.columns:
+                            pdf_df['total_price'] = pdf_df['quantity'] * pdf_df['unit_price'] * pdf_df['price_factor']
+                        
+                        # Use export_filename_base for the project name in PDF
+                        pdf_bytes = generate_offer_pdf(pdf_df, export_filename_base)
+                        
+                        # Sanitize filename
+                        safe_filename = sanitize_filename(export_filename_base)
+                        
+                        # Create full file path
+                        pdf_filename = f"Angebot_{safe_filename}_{datetime.now().strftime('%Y%m%d')}.pdf"
+                        pdf_filepath = os.path.join(export_folder, pdf_filename)
+                        
+                        # Write to file
+                        with open(pdf_filepath, 'wb') as f:
+                            f.write(pdf_bytes)
+                        
+                        st.success(f"✅ **PDF gespeichert!**")
+                        st.info(f"📂 Speicherort: `{pdf_filepath}`")
+                        
+                    except PermissionError:
+                        st.error(f"❌ Keine Berechtigung zum Schreiben in: {export_folder}")
+                    except Exception as e:
+                        st.error(f"❌ PDF-Fehler: {str(e)}")
 
 else:
     st.markdown("""
