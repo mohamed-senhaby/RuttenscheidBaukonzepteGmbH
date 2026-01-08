@@ -1,0 +1,8 @@
+=XVERWEIS(
+  B12,
+  [Kalkulation_Bauprojekt_20260107.xlsx]Sheet1!$A:$A,
+  [Kalkulation_Bauprojekt_20260107.xlsx]Sheet1!$E:$E
+)
+
+
+=WENN(B12="","",XVERWEIS(B12,[Kalkulation_Bauprojekt_20260107.xlsx]Sheet1!$A:$A,[Kalkulation_Bauprojekt_20260107.xlsx]Sheet1!$F:$F,""))
