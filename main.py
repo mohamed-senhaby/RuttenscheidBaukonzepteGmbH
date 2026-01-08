@@ -15,6 +15,31 @@ from google.genai.errors import ServerError, APIError
 # --- CONSTANTS & CONFIGURATION ---
 COMPANY_NAME = "Rüttenscheid Baukonzepte GmbH"
 
+# Helper function for German number formatting
+def format_german_number(value, decimals=2):
+    """Format number in German style: 1.234.567,89"""
+    if pd.isna(value) or value is None:
+        return "0,00"
+    try:
+        value = float(value)
+        # Python's default format uses comma for thousands and dot for decimal (English format)
+        # Example: 1234567.89 -> "1,234,567.89"
+        formatted = f"{value:,.{decimals}f}"
+
+        # Now swap to German format:
+        # Step 1: Replace comma (thousand separator) with dot
+        formatted = formatted.replace(',', '.')
+        # Step 2: Replace the last dot before decimals with comma
+        # Find the position of decimal point (it's a dot in English format)
+        parts = formatted.rsplit('.', 1)  # Split from right, only once
+        if len(parts) == 2:
+            # parts[0] = "1.234.567", parts[1] = "89"
+            formatted = parts[0] + ',' + parts[1]
+
+        return formatted
+    except:
+        return "0,00"
+
 # Master AI Prompt - Handles ALL file types
 MASTER_EXTRACTION_PROMPT = """
 Du bist ein erfahrener Baukalkulator mit 25 Jahren Erfahrung bei der Rüttenscheid Baukonzepte GmbH.
@@ -68,17 +93,22 @@ Allgemeine Geschäftskosten (AGK: ~5-8%)
 Wagnis & Gewinn (W&G: ~3-5%)
 PREISBEISPIELE zur Orientierung:
 
-Baustelleneinrichtung: 1.500 - 5.000 EUR (Pauschale)
-Erdaushub Bagger: 8-15 EUR/m³
-Beton C25/30 liefern und einbauen: 180-250 EUR/m³
-Mauerwerk Ziegel herstellen: 85-120 EUR/m²
-Bewehrung liefern und verlegen: 1.200-1.800 EUR/t
-Schalung herstellen und abbrechen: 35-65 EUR/m²
-Dachziegel decken: 45-75 EUR/m²
-Putz innen auftragen: 25-40 EUR/m²
-Fliesen verlegen: 40-80 EUR/m²
-⚠️ KRITISCH: JEDE Position MUSS einen Preis > 0 haben!
-Keine Position darf unit_price: 0.0 haben!
+Baustelleneinrichtung: 1.500,00 - 5.000,00 EUR (Pauschale)
+Erdaushub Bagger: 8,50-15,75 EUR/m³
+Beton C25/30 liefern und einbauen: 180,25-250,80 EUR/m³
+Mauerwerk Ziegel herstellen: 85,50-120,75 EUR/m²
+Bewehrung liefern und verlegen: 1.200,00-1.800,00 EUR/t
+Schalung herstellen und abbrechen: 35,25-65,80 EUR/m²
+Dachziegel decken: 45,60-75,90 EUR/m²
+Putz innen auftragen: 25,50-40,75 EUR/m²
+Fliesen verlegen: 40,80-80,50 EUR/m²
+
+⚠️ KRITISCH WICHTIG:
+• JEDE Position MUSS einen Preis > 0 haben!
+• Keine Position darf unit_price: 0.0 haben!
+• Preise MÜSSEN Cent-Beträge enthalten (z.B. 45.50, 125.75, 1250.25)
+• NIEMALS runde Zahlen wie 45.00, 100.00, 250.00 verwenden!
+• Realistische Preise haben IMMER Nachkommastellen!
 
 AUSGABEFORMAT:
 Gib NUR ein valides JSON-Array zurück.
@@ -88,7 +118,8 @@ NUR das reine JSON-Array.
 Format:
 [
 {"pos": "0010", "description": "Vollständige Beschreibung", "quantity": 10.5, "unit": "m²", "unit_price": 45.50},
-{"pos": "0020", "description": "Nächste Position...", "quantity": 25.0, "unit": "m³", "unit_price": 125.00}
+{"pos": "0020", "description": "Nächste Position...", "quantity": 25.0, "unit": "m³", "unit_price": 125.75},
+{"pos": "0030", "description": "Weitere Position...", "quantity": 15.0, "unit": "t", "unit_price": 1450.25}
 ]
 
 QUALITÄTSKRITERIEN:
@@ -114,10 +145,15 @@ Berücksichtige Material, Lohn, Geräte, Transport, BGK, AGK, W&G
 Orientierung an typischen Baupreisen 2024/2025
 PREISREFERENZEN:
 
-Einfache Arbeiten (Aushub, Abbruch): 10-50 EUR
-Mittlere Komplexität (Mauerwerk, Schalung): 50-150 EUR
-Hohe Komplexität (Beton, Bewehrung): 150-300 EUR
-Spezialleistungen (Abdichtung, Dämmung): 300+ EUR
+Einfache Arbeiten (Aushub, Abbruch): 10,50-50,75 EUR
+Mittlere Komplexität (Mauerwerk, Schalung): 50,25-150,80 EUR
+Hohe Komplexität (Beton, Bewehrung): 150,50-300,75 EUR
+Spezialleistungen (Abdichtung, Dämmung): 300,00+ EUR
+
+⚠️ WICHTIG:
+• Alle Preise MÜSSEN Cent-Beträge haben (z.B. 45.50, 125.75, 250.25)
+• NIEMALS nur runde Zahlen wie 100.00 oder 250.00!
+• Realistische Baupreise haben IMMER Nachkommastellen!
 Eingabe-Positionen:
 {positions_json}
 
@@ -649,10 +685,10 @@ def generate_offer_pdf(df, project_name):
         
         pdf.cell(w[0], 8, pos, 1, 0, 'C')
         pdf.cell(w[1], 8, desc, 1, 0, 'L')
-        pdf.cell(w[2], 8, f"{qty:.2f}", 1, 0, 'C')
+        pdf.cell(w[2], 8, f"{qty:.2f}".replace('.', ','), 1, 0, 'C')
         pdf.cell(w[3], 8, unit, 1, 0, 'C')
-        pdf.cell(w[4], 8, f"{ep:,.2f}", 1, 0, 'R')
-        pdf.cell(w[5], 8, f"{gp:,.2f}", 1, 1, 'R')
+        pdf.cell(w[4], 8, format_german_number(ep), 1, 0, 'R')
+        pdf.cell(w[5], 8, format_german_number(gp), 1, 1, 'R')
     
     # Totals
     pdf.ln(5)
@@ -660,7 +696,7 @@ def generate_offer_pdf(df, project_name):
     def print_total(label, value, bold=False):
         pdf.set_font("Arial", 'B' if bold else '', 10)
         pdf.cell(145, 8, clean(label), 0, 0, 'R')
-        pdf.cell(45, 8, f"{value:,.2f} EUR", 1 if bold else 0, 1, 'R')
+        pdf.cell(45, 8, f"{format_german_number(value)} EUR", 1 if bold else 0, 1, 'R')
     
     print_total("Summe Netto:", total_netto)
     print_total("zzgl. 19% MwSt.:", total_netto * 0.19)
@@ -809,10 +845,10 @@ if uploaded_file:
                         st.metric("💰 Mit Preis", f"{priced}", help="Positionen mit Preisangabe")
                     with col3:
                         total = (df_result['quantity'] * df_result['unit_price']).sum()
-                        st.metric("💵 Summe Netto", f"{total:,.0f} €", help="Gesamtsumme ohne MwSt.")
+                        st.metric("💵 Summe Netto", f"{format_german_number(total, 0)} €", help="Gesamtsumme ohne MwSt.")
                     with col4:
                         total_brutto = total * 1.19
-                        st.metric("✅ Summe Brutto", f"{total_brutto:,.0f} €", help="Gesamtsumme inkl. 19% MwSt.")
+                        st.metric("✅ Summe Brutto", f"{format_german_number(total_brutto, 0)} €", help="Gesamtsumme inkl. 19% MwSt.")
                 else:
                     st.error("❌ Keine Positionen gefunden. Bitte prüfen Sie das Dokument.")
                     
@@ -840,16 +876,6 @@ st.subheader("✏️ Schritt 2: Positionen bearbeiten")
 
 if not st.session_state.calculation_df.empty:
     
-    st.markdown("""
-    <div style='background-color: #fef3c7; padding: 12px; border-radius: 8px; border-left: 4px solid #f59e0b; margin: 10px 0;'>
-        <strong>💡 Bearbeitungstipps:</strong><br>
-        • Doppelklicken zum Bearbeiten einer Zelle<br>
-        • Zeilen hinzufügen mit dem ➕ Button<br>
-        • Zeilen löschen durch Auswahl und 🗑️ Button<br>
-        • GP netto wird automatisch berechnet (Menge × EP)
-    </div>
-    """, unsafe_allow_html=True)
-    
     # Calculate total price for display using price_factor
     display_df = st.session_state.calculation_df.copy()
     # Ensure price_factor column exists
@@ -857,25 +883,52 @@ if not st.session_state.calculation_df.empty:
         display_df['price_factor'] = 1.0
     # EP netto stays as original unit_price, GP netto includes factor
     display_df['total_price'] = display_df['quantity'] * display_df['unit_price'] * display_df['price_factor']
-    
+
+    # Create formatted display columns for German number format
+    display_df['quantity_display'] = display_df['quantity'].apply(lambda x: format_german_number(x, 2))
+    display_df['unit_price_display'] = display_df['unit_price'].apply(lambda x: format_german_number(x, 2))
+    display_df['total_price_display'] = display_df['total_price'].apply(lambda x: format_german_number(x, 2))
+
     edited_df = st.data_editor(
         display_df,
         column_config={
             "pos": st.column_config.TextColumn("Pos.", width="small"),
             "description": st.column_config.TextColumn("Leistungsbezeichnung", width="large"),
-            "quantity": st.column_config.NumberColumn("Menge", format="%.2f", min_value=0),
+            "quantity_display": st.column_config.TextColumn("Menge", width="small", help="Menge im deutschen Format"),
             "unit": st.column_config.TextColumn("Einheit", width="small"),
-            "unit_price": st.column_config.NumberColumn("EP netto (€)", format="%.2f", min_value=0, help="Einheitspreis netto (Original-KI-Preis)"),
-            "total_price": st.column_config.NumberColumn("GP netto (€)", format="%.2f", disabled=True, help="Gesamtpreis = Menge × EP × Faktor"),
-            "original_price": None,  # Hide original_price column
-            "price_factor": None  # Hide price_factor column
+            "unit_price_display": st.column_config.TextColumn("EP netto (€)", width="medium", help="Einheitspreis: 1.234,56 €"),
+            "total_price_display": st.column_config.TextColumn("GP netto (€)", width="medium", disabled=True, help="Gesamtpreis (Menge × EP × Faktor): 3.602,40 €"),
+            "quantity": None,  # Hide raw numeric columns
+            "unit_price": None,
+            "total_price": None,
+            "original_price": None,
+            "price_factor": None
         },
-        column_order=["pos", "description", "quantity", "unit", "unit_price", "total_price"],
+        column_order=["pos", "description", "quantity_display", "unit", "unit_price_display", "total_price_display"],
         num_rows="dynamic",
         use_container_width=True,
         height=400,
-        key="editor"
+        key="editor",
+        disabled=["total_price_display"]
     )
+
+    # Convert German formatted strings back to numbers for calculations
+    def parse_german_number(value_str):
+        """Convert German formatted string back to float: '1.234,56' -> 1234.56"""
+        if pd.isna(value_str) or value_str == "":
+            return 0.0
+        try:
+            # Remove thousand separators (dots) and replace decimal comma with dot
+            cleaned = str(value_str).replace('.', '').replace(',', '.')
+            return float(cleaned)
+        except:
+            return 0.0
+
+    # Update numeric values from edited German-formatted strings
+    if 'quantity_display' in edited_df.columns:
+        edited_df['quantity'] = edited_df['quantity_display'].apply(parse_german_number)
+    if 'unit_price_display' in edited_df.columns:
+        edited_df['unit_price'] = edited_df['unit_price_display'].apply(parse_german_number)
     
     # Price multiplier with enhanced UI
     st.markdown("")
@@ -932,11 +985,86 @@ if not st.session_state.calculation_df.empty:
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("💵 Summe Netto", f"{total_netto:,.2f} €", help="Gesamtsumme ohne Mehrwertsteuer")
+        st.metric("💵 Summe Netto", f"{format_german_number(total_netto)} €", help="Gesamtsumme ohne Mehrwertsteuer")
     with col2:
-        st.metric("📊 MwSt. (19%)", f"{total_mwst:,.2f} €", help="Mehrwertsteuer 19%")
+        st.metric("📊 MwSt. (19%)", f"{format_german_number(total_mwst)} €", help="Mehrwertsteuer 19%")
     with col3:
-        st.metric("✅ Summe Brutto", f"{total_brutto:,.2f} €", delta=f"+{total_mwst:,.2f} €", help="Gesamtsumme inkl. MwSt.")
+        st.metric("✅ Summe Brutto", f"{format_german_number(total_brutto)} €", delta=f"+{format_german_number(total_mwst)} €", help="Gesamtsumme inkl. MwSt.")
+    
+    st.markdown("---")
+    
+    # Folder Generator
+    with st.expander("📁 Projektordner-Generator", expanded=False):
+        st.markdown("Erstellen Sie automatisch eine strukturierte Ordnerstruktur für Ihr Bauprojekt.")
+        
+        col_folder1, col_folder2 = st.columns(2)
+        
+        with col_folder1:
+            folder_location = st.text_input(
+                "📍 Speicherort:",
+                value=os.path.expanduser("~\\Desktop"),
+                help="Geben Sie den vollständigen Pfad ein, wo der Hauptordner erstellt werden soll",
+                key="folder_location"
+            )
+        
+        with col_folder2:
+            project_name_for_folder = st.text_input(
+                "📝 Name des Hauptordners:",
+                value=st.session_state.project_name if st.session_state.project_name else "Neues_Projekt",
+                help="Geben Sie den Namen für den Hauptordner ein",
+                key="folder_name_input"
+            )
+        
+        st.markdown("")
+        st.markdown("**Folgende Unterordner werden automatisch erstellt:**")
+        subfolder_structure = [
+            "01_Projektunterlagen",
+            "02_Angebote",
+            "03_Rechnungen",
+            "04_Vergabeunterlagen",
+            "05_Kontaktdaten",
+            "06_Nachunternehmen",
+            "07_Ausgang"
+        ]
+        
+        cols = st.columns(4)
+        for idx, subfolder in enumerate(subfolder_structure):
+            with cols[idx % 4]:
+                st.markdown(f"✓ {subfolder}")
+        
+        st.markdown("")
+        
+        if st.button("🗂️ Ordnerstruktur erstellen", use_container_width=True, type="primary", key="create_folders"):
+            try:
+                # Sanitize main folder name (use project name from session state)
+                safe_main_folder = sanitize_filename(project_name_for_folder)
+                
+                # Create full path
+                main_folder_path = os.path.join(folder_location, safe_main_folder)
+                
+                # Check if location exists
+                if not os.path.exists(folder_location):
+                    st.error(f"❌ Der Speicherort existiert nicht: {folder_location}")
+                elif os.path.exists(main_folder_path):
+                    st.warning(f"⚠️ Der Ordner existiert bereits: {main_folder_path}")
+                else:
+                    # Create main folder
+                    os.makedirs(main_folder_path, exist_ok=True)
+                    
+                    # Create subfolders
+                    created_folders = []
+                    for subfolder in subfolder_structure:
+                        subfolder_path = os.path.join(main_folder_path, subfolder)
+                        os.makedirs(subfolder_path, exist_ok=True)
+                        created_folders.append(subfolder)
+                    
+                    st.success(f"✅ **Erfolgreich erstellt!**")
+                    st.info(f"📂 Hauptordner: `{main_folder_path}`")
+                    
+            except PermissionError:
+                st.error(f"❌ Keine Berechtigung zum Erstellen von Ordnern in: {folder_location}")
+            except Exception as e:
+                st.error(f"❌ Fehler beim Erstellen der Ordnerstruktur: {str(e)}")
     
     st.markdown("---")
     
@@ -960,17 +1088,67 @@ if not st.session_state.calculation_df.empty:
     col1, col2 = st.columns(2)
     
     with col1:
-        # Excel Export
+        # Excel Export with proper German number formatting
         excel_buffer = io.BytesIO()
-        # Prepare export dataframe with German column names
+
+        # Prepare export dataframe with German-formatted text
         export_df = edited_df[['pos', 'description', 'quantity', 'unit', 'unit_price']].copy()
         # Calculate GP with price factor
         if 'price_factor' in edited_df.columns:
             export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price'] * edited_df['price_factor']
         else:
             export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price']
+
+        # Convert numeric columns to German-formatted text strings
+        # This ensures copy-paste preserves the German format
+        export_df['quantity'] = export_df['quantity'].apply(lambda x: format_german_number(x, 2))
+        export_df['unit_price'] = export_df['unit_price'].apply(lambda x: format_german_number(x, 2))
+        export_df['total_price'] = export_df['total_price'].apply(lambda x: format_german_number(x, 2))
+
+        # Rename columns to German
         export_df.columns = ['Pos.', 'Leistungsbezeichnung', 'Menge', 'Einheit', 'EP netto (€)', 'GP netto (€)']
-        export_df.to_excel(excel_buffer, index=False, engine='openpyxl')
+
+        # Write to Excel
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            export_df.to_excel(writer, index=False, sheet_name='Kalkulation')
+
+            # Get the worksheet for styling
+            worksheet = writer.sheets['Kalkulation']
+
+            # Clean up values and set as text - remove any leading apostrophes
+            from openpyxl.styles import Alignment
+            from openpyxl.cell.cell import TYPE_STRING
+
+            for row in range(2, len(export_df) + 2):
+                # Menge (column C/3) - Clean value and set as text
+                cell_c = worksheet.cell(row=row, column=3)
+                # Remove leading apostrophe if exists
+                clean_value_c = str(cell_c.value).lstrip("'") if cell_c.value else ""
+                cell_c.value = clean_value_c
+                cell_c.data_type = TYPE_STRING
+                cell_c.alignment = Alignment(horizontal='right')
+
+                # EP netto (column E/5) - Clean value and set as text
+                cell_e = worksheet.cell(row=row, column=5)
+                clean_value_e = str(cell_e.value).lstrip("'") if cell_e.value else ""
+                cell_e.value = clean_value_e
+                cell_e.data_type = TYPE_STRING
+                cell_e.alignment = Alignment(horizontal='right')
+
+                # GP netto (column F/6) - Clean value and set as text
+                cell_f = worksheet.cell(row=row, column=6)
+                clean_value_f = str(cell_f.value).lstrip("'") if cell_f.value else ""
+                cell_f.value = clean_value_f
+                cell_f.data_type = TYPE_STRING
+                cell_f.alignment = Alignment(horizontal='right')
+
+            # Adjust column widths for better readability
+            worksheet.column_dimensions['A'].width = 12  # Pos.
+            worksheet.column_dimensions['B'].width = 50  # Leistungsbezeichnung
+            worksheet.column_dimensions['C'].width = 15  # Menge
+            worksheet.column_dimensions['D'].width = 10  # Einheit
+            worksheet.column_dimensions['E'].width = 18  # EP netto
+            worksheet.column_dimensions['F'].width = 18  # GP netto
         
         # Sanitize project name for filename
         safe_project_name = sanitize_filename(project_name)
