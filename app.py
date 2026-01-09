@@ -229,7 +229,11 @@ def call_ai_with_retry(client, model, contents, max_retries=3, initial_delay=5):
                 
             except ServerError as e:
                 last_error = e
-                if e.status_code == 503:
+                # Check if the error is 503 (overloaded) by examining the error details
+                error_dict = getattr(e, 'error', {})
+                error_code = error_dict.get('code', 0) if isinstance(error_dict, dict) else 0
+
+                if error_code == 503 or '503' in str(e) or 'overloaded' in str(e).lower():
                     # Model overloaded - try next model
                     print(f"⚠️ Model {current_model} is overloaded (503)")
                     if model_idx < len(models_to_try) - 1:
@@ -723,7 +727,7 @@ st.set_page_config(
 )
 
 # Initialize API Client
-api_key = st.secrets.get("api_key", "")
+api_key = "AIzaSyDOYCdd7k26tClVKwz9gKQAjJaic0mNrtY"
 
 if not api_key:
     st.error("⚠️ API Key fehlt! Bitte in secrets.toml konfigurieren.")
@@ -761,6 +765,8 @@ if "price_factor" not in st.session_state:
     st.session_state.price_factor = 1.0
 if "project_name" not in st.session_state:
     st.session_state.project_name = "Bauprojekt"
+if "project_link" not in st.session_state:
+    st.session_state.project_link = ""
 if "file_uploader_key" not in st.session_state:
     st.session_state.file_uploader_key = 0
 
@@ -1037,6 +1043,16 @@ if not st.session_state.calculation_df.empty:
             )
         
         st.markdown("")
+        project_link = st.text_input(
+            "🔗 Projekt-Link :",
+            value=st.session_state.project_link,
+            help="Geben Sie einen Link zum Projekt ein (z.B. Cloud-Speicher, Projektmanagement-Tool)",
+            key="project_link_input"
+        )
+        # Update session state
+        st.session_state.project_link = project_link
+        
+        st.markdown("")
         st.markdown("**Folgende Unterordner werden automatisch erstellt:**")
         subfolder_structure = [
             "01_Projektunterlagen",
@@ -1079,7 +1095,16 @@ if not st.session_state.calculation_df.empty:
                         os.makedirs(subfolder_path, exist_ok=True)
                         created_folders.append(subfolder)
                     
+                    # Create project link text file if link is provided
+                    if st.session_state.project_link and st.session_state.project_link.strip():
+                        link_filename = f"Projekt_Link_{safe_main_folder}.txt"
+                        link_filepath = os.path.join(main_folder_path, link_filename)
+                        with open(link_filepath, 'w', encoding='utf-8') as f:
+                            f.write(f"{st.session_state.project_link}\n")
+                    
                     st.success(f"✅ **Erfolgreich erstellt!**")
+                    if st.session_state.project_link and st.session_state.project_link.strip():
+                        st.success(f"✅ **Projekt-Link gespeichert!**")
                     st.info(f"📂 Hauptordner: `{main_folder_path}`")
                     
             except PermissionError:
@@ -1105,10 +1130,18 @@ if not st.session_state.calculation_df.empty:
         # Excel Export with proper German number formatting
         if st.button("💾 Excel speichern", use_container_width=True, type="primary"):
             try:
-                # Check if export folder exists
+                # Sanitize project folder name
+                safe_project_folder = sanitize_filename(export_filename_base)
+                # Create full project folder path
+                project_folder_path = os.path.join(export_folder, safe_project_folder)
+                
+                # Check if base export folder exists
                 if not os.path.exists(export_folder):
                     st.error(f"❌ Der Speicherort existiert nicht: {export_folder}")
                 else:
+                    # Create project folder if it doesn't exist
+                    os.makedirs(project_folder_path, exist_ok=True)
+                    
                     excel_buffer = io.BytesIO()
 
                     # Prepare export dataframe with German-formatted text
@@ -1173,15 +1206,24 @@ if not st.session_state.calculation_df.empty:
                     # Sanitize filename
                     safe_filename = sanitize_filename(export_filename_base)
                     
-                    # Create full file path
+                    # Create full file path inside project folder
                     excel_filename = f"Kalkulation_{safe_filename}_{datetime.now().strftime('%Y%m%d')}.xlsx"
-                    excel_filepath = os.path.join(export_folder, excel_filename)
+                    excel_filepath = os.path.join(project_folder_path, excel_filename)
                     
                     # Write to file
                     with open(excel_filepath, 'wb') as f:
                         f.write(excel_buffer.getvalue())
                     
+                    # Create project link text file if link is provided
+                    if st.session_state.project_link and st.session_state.project_link.strip():
+                        link_filename = f"Projekt_Link_{safe_filename}.txt"
+                        link_filepath = os.path.join(project_folder_path, link_filename)
+                        with open(link_filepath, 'w', encoding='utf-8') as f:
+                            f.write(f"{st.session_state.project_link}\n")
+                    
                     st.success(f"✅ **Excel gespeichert!**")
+                    if st.session_state.project_link and st.session_state.project_link.strip():
+                        st.success(f"✅ **Projekt-Link gespeichert!**")
                     st.info(f"📂 Speicherort: `{excel_filepath}`")
                     
             except PermissionError:
@@ -1191,11 +1233,19 @@ if not st.session_state.calculation_df.empty:
     
     with col2:
         # PDF Export
-        if st.button("� PDF speichern", use_container_width=True, type="primary"):
-            # Check if export folder exists
+        if st.button("📄 PDF speichern", use_container_width=True, type="primary"):
+            # Sanitize project folder name
+            safe_project_folder = sanitize_filename(export_filename_base)
+            # Create full project folder path
+            project_folder_path = os.path.join(export_folder, safe_project_folder)
+            
+            # Check if base export folder exists
             if not os.path.exists(export_folder):
                 st.error(f"❌ Der Speicherort existiert nicht: {export_folder}")
             else:
+                # Create project folder if it doesn't exist
+                os.makedirs(project_folder_path, exist_ok=True)
+                
                 with st.spinner("Erstelle PDF..."):
                     try:
                         # Prepare dataframe for PDF with calculated total prices
@@ -1209,15 +1259,24 @@ if not st.session_state.calculation_df.empty:
                         # Sanitize filename
                         safe_filename = sanitize_filename(export_filename_base)
                         
-                        # Create full file path
+                        # Create full file path inside project folder
                         pdf_filename = f"Angebot_{safe_filename}_{datetime.now().strftime('%Y%m%d')}.pdf"
-                        pdf_filepath = os.path.join(export_folder, pdf_filename)
+                        pdf_filepath = os.path.join(project_folder_path, pdf_filename)
                         
                         # Write to file
                         with open(pdf_filepath, 'wb') as f:
                             f.write(pdf_bytes)
                         
+                        # Create project link text file if link is provided
+                        if st.session_state.project_link and st.session_state.project_link.strip():
+                            link_filename = f"Projekt_Link_{safe_filename}.txt"
+                            link_filepath = os.path.join(project_folder_path, link_filename)
+                            with open(link_filepath, 'w', encoding='utf-8') as f:
+                                f.write(f"{st.session_state.project_link}\n")
+                        
                         st.success(f"✅ **PDF gespeichert!**")
+                        if st.session_state.project_link and st.session_state.project_link.strip():
+                            st.success(f"✅ **Projekt-Link gespeichert!**")
                         st.info(f"📂 Speicherort: `{pdf_filepath}`")
                         
                     except PermissionError:
