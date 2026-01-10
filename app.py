@@ -1,5 +1,5 @@
 import streamlit as st
-import google.genai as genai
+import google.generativeai as genai
 import tempfile
 import os
 import pandas as pd
@@ -11,7 +11,7 @@ from fpdf import FPDF
 import re
 import traceback
 import time
-from google.genai.errors import ServerError, APIError
+from google.generativeai.types import GenerationConfig
 from tkinter import Tk, filedialog
 
 # --- CONSTANTS & CONFIGURATION ---
@@ -192,7 +192,7 @@ def get_mime_type(file_path):
     
     return mime_types.get(ext, 'application/octet-stream')
 
-def call_ai_with_retry(client, model, contents, max_retries=3, initial_delay=5):
+def call_ai_with_retry(model, contents, max_retries=3, initial_delay=5):
     """
     Call AI API with exponential backoff retry logic and automatic model switching.
     Tries alternative models when encountering 503 (overloaded) or 429 (quota exceeded) errors.
@@ -223,41 +223,31 @@ def call_ai_with_retry(client, model, contents, max_retries=3, initial_delay=5):
         
         for attempt in range(max_retries):
             try:
-                response = client.models.generate_content(
-                    model=current_model,
-                    contents=contents
-                )
+                model = genai.GenerativeModel(current_model)
+                response = model.generate_content(contents)
                 if model_idx > 0:
                     print(f"✅ Successfully switched to model: {current_model}")
                 return response, current_model
                 
-            except ServerError as e:
+            except Exception as e:
                 last_error = e
-                # Check if the error is 503 (overloaded) by examining the error details
-                error_dict = getattr(e, 'error', {})
-                error_code = error_dict.get('code', 0) if isinstance(error_dict, dict) else 0
-
-                if error_code == 503 or '503' in str(e) or 'overloaded' in str(e).lower():
-                    # Model overloaded - try next model
+                error_str = str(e)
+                
+                # Check for 503/overloaded errors
+                if '503' in error_str or 'overloaded' in error_str.lower():
                     print(f"⚠️ Model {current_model} is overloaded (503)")
                     if model_idx < len(models_to_try) - 1:
                         print(f"🔄 Switching to next model...")
-                        break  # Break inner loop to try next model
+                        break
                     elif attempt < max_retries - 1:
                         wait_time = initial_delay * (2 ** attempt)
                         print(f"⚠️ All models tried. Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                     else:
-                        # Last model, last attempt
                         continue
-                else:
-                    raise
-                    
-            except APIError as e:
-                last_error = e
-                if hasattr(e, 'status_code') and e.status_code == 429:
-                    error_str = str(e)
-                    
+                
+                # Check for 429/quota/rate limit errors
+                elif '429' in error_str or 'quota' in error_str.lower() or 'RESOURCE_EXHAUSTED' in error_str:
                     # Check if this is a token quota error (per-minute limit)
                     if 'input_token_count' in error_str or 'GenerateContentInputTokensPerModelPerMinute' in error_str:
                         print(f"⚠️ Token quota exceeded for {current_model}")
@@ -270,7 +260,7 @@ def call_ai_with_retry(client, model, contents, max_retries=3, initial_delay=5):
                         
                         if model_idx < len(models_to_try) - 1:
                             print(f"🔄 Switching to next model...")
-                            break  # Try next model
+                            break
                         elif attempt < max_retries - 1:
                             print(f"⚠️ Waiting {retry_delay:.0f}s before retry...")
                             time.sleep(retry_delay)
@@ -281,14 +271,15 @@ def call_ai_with_retry(client, model, contents, max_retries=3, initial_delay=5):
                         print(f"⚠️ Request quota exceeded for {current_model}")
                         if model_idx < len(models_to_try) - 1:
                             print(f"🔄 Switching to next model...")
-                            break  # Try next model
+                            break
                         else:
-                            raise
-                            
-                elif hasattr(e, 'status_code') and e.status_code in [500, 502, 504]:
+                            continue
+                
+                # Check for 500/502/504 server errors
+                elif '500' in error_str or '502' in error_str or '504' in error_str:
                     if attempt < max_retries - 1:
                         wait_time = initial_delay * (2 ** attempt)
-                        print(f"⚠️ API error ({e.status_code}). Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
+                        print(f"⚠️ API error (5xx). Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                     else:
                         if model_idx < len(models_to_try) - 1:
@@ -296,8 +287,15 @@ def call_ai_with_retry(client, model, contents, max_retries=3, initial_delay=5):
                             break
                         else:
                             raise
+                
+                # Other errors - try next model or raise
                 else:
-                    raise
+                    if model_idx < len(models_to_try) - 1:
+                        print(f"⚠️ Error with {current_model}: {error_str[:100]}")
+                        print(f"🔄 Trying next model...")
+                        break
+                    else:
+                        raise
     
     # If we got here, all models failed
     if last_error:
@@ -420,7 +418,7 @@ def extract_positions_from_structured_excel(file_path):
         print(f"❌ Error extracting from Excel: {e}")
         return []
 
-def estimate_prices_with_ai(positions, client):
+def estimate_prices_with_ai(positions):
     """
     Use AI to estimate prices for positions based on Langtext descriptions.
     """
@@ -496,7 +494,6 @@ Ausgabe NUR als JSON-Array (keine Erklärungen):
         
         # Call AI with more powerful model for better price analysis
         response, model_used = call_ai_with_retry(
-            client=client,
             model='gemini-3-pro-preview',  # Most powerful model for best accuracy
             contents=[prompt]
         )
@@ -569,7 +566,7 @@ def read_excel_as_text(file_path):
         print(f"Error reading Excel file: {e}")
         return None
 
-def extract_with_ai(file_path, file_extension, client):
+def extract_with_ai(file_path, file_extension):
     """
     Master extraction function - sends file directly to AI for complete analysis.
     """
@@ -599,7 +596,7 @@ def extract_with_ai(file_path, file_extension, client):
                 
                 if positions:
                     # Estimate prices with AI
-                    positions = estimate_prices_with_ai(positions, client)
+                    positions = estimate_prices_with_ai(positions)
                     
                     # Convert to DataFrame
                     data = []
@@ -644,7 +641,6 @@ def extract_with_ai(file_path, file_extension, client):
             analysis_start = time.time()
             prompt_with_data = f"{MASTER_EXTRACTION_PROMPT}\n\nDOKUMENT INHALT:\n{excel_text}"
             response, model_used = call_ai_with_retry(
-                client=client,
                 model='gemini-2.5-flash-lite',
                 contents=[prompt_with_data]
             )
@@ -657,16 +653,16 @@ def extract_with_ai(file_path, file_extension, client):
             mime_type = get_mime_type(file_path)
             print(f"   MIME Type: {mime_type}")
             
-            # Upload file to Gemini - let it auto-detect or specify in config
+            # Upload file to Gemini
             try:
-                # Try with config parameter
-                file_ref = client.files.upload(
-                    file=file_path,
-                    config={'mime_type': mime_type}
+                # Try with mime_type parameter
+                file_ref = genai.upload_file(
+                    path=file_path,
+                    mime_type=mime_type
                 )
             except TypeError:
                 # Fallback: let it auto-detect
-                file_ref = client.files.upload(file=file_path)
+                file_ref = genai.upload_file(path=file_path)
             
             upload_time = time.time() - upload_start
             print(f"✅ File uploaded successfully ({upload_time:.2f}s)")
@@ -679,7 +675,6 @@ def extract_with_ai(file_path, file_extension, client):
             
             analysis_start = time.time()
             response, model_used = call_ai_with_retry(
-                client=client,
                 model='gemini-2.5-flash-lite',
                 contents=[file_ref, MASTER_EXTRACTION_PROMPT]
             )
@@ -707,7 +702,7 @@ def extract_with_ai(file_path, file_extension, client):
                 print(f"⚠️  Warning: {zero_prices} positions with zero price")
                 print(f"🔧 Requesting AI to fix prices...")
                 price_fix_start = time.time()
-                df = fix_prices_with_ai(df, client)
+                df = fix_prices_with_ai(df)
                 price_fix_time = time.time() - price_fix_start
                 print(f"   Price fixing time: {price_fix_time:.2f}s")
             
@@ -792,7 +787,7 @@ def parse_json_response(text):
         print(f"❌ JSON parsing error: {e}")
         return pd.DataFrame(columns=["pos", "description", "quantity", "unit", "unit_price"])
 
-def fix_prices_with_ai(df, client):
+def fix_prices_with_ai(df):
     """
     Send positions back to AI to fix zero or missing prices.
     """
@@ -809,7 +804,6 @@ def fix_prices_with_ai(df, client):
         
         # Send to AI with retry logic
         response, model_used = call_ai_with_retry(
-            client=client,
             model='gemini-2.5-flash-lite',
             contents=[prompt]
         )
@@ -987,7 +981,7 @@ if not api_key:
     st.info("💡 Für Deployment: Fügen Sie GEMINI_API_KEY in den App-Secrets hinzu.")
     st.stop()
 
-client = genai.Client(api_key=api_key)
+genai.configure(api_key=api_key)
 
 # Header with logo and company name centered
 logo_path = "Data/Screenshot 2026-01-07 214122.png"
@@ -1102,7 +1096,7 @@ if uploaded_file:
             
             try:
                 # Extract with AI
-                df_result = extract_with_ai(temp_path, suffix.lower(), client)
+                df_result = extract_with_ai(temp_path, suffix.lower())
                 
                 # Cleanup temp file
                 safe_remove_file(temp_path)
