@@ -5,12 +5,14 @@ import os
 import pandas as pd
 import json
 import io
+import openpyxl
 from datetime import datetime
 from fpdf import FPDF
 import re
 import traceback
 import time
 from google.genai.errors import ServerError, APIError
+from tkinter import Tk, filedialog
 
 # --- CONSTANTS & CONFIGURATION ---
 COMPANY_NAME = "Rüttenscheid Baukonzepte GmbH"
@@ -198,6 +200,8 @@ def call_ai_with_retry(client, model, contents, max_retries=3, initial_delay=5):
     """
     # Define available models in priority order
     available_models = [
+        'gemini-3-flash-preview',
+        'gemini-3-pro-preview',
         'gemini-2.5-flash',
         'gemini-2.5-flash-lite',
         'gemini-2.0-flash',
@@ -343,6 +347,209 @@ def sanitize_filename(filename):
     
     return sanitized
 
+def check_excel_structure(file_path):
+    """
+    Check if Excel file has the expected structure for direct extraction.
+    Returns True if structure matches (Position in col A).
+    """
+    try:
+        workbook = openpyxl.load_workbook(file_path)
+        sheet = workbook.active
+        
+        # Check if we can find "Position" in column A
+        position_count = 0
+        for row in range(1, min(50, sheet.max_row + 1)):  # Check first 50 rows
+            cell_value = sheet[f'A{row}'].value
+            if cell_value and "Position" in str(cell_value):
+                position_count += 1
+                # If we find at least 1 position, consider it valid
+                if position_count >= 1:
+                    workbook.close()
+                    print(f"✓ Found {position_count} Position(s) in column A - structure detected")
+                    return True
+        
+        workbook.close()
+        if position_count == 0:
+            print(f"⚠️ No 'Position' entries found in column A")
+        return False
+    except Exception as e:
+        print(f"Error checking Excel structure: {e}")
+        return False
+
+def extract_positions_from_structured_excel(file_path):
+    """
+    Extract positions from Excel file with known structure.
+    Returns list of dictionaries with position data.
+    """
+    try:
+        workbook = openpyxl.load_workbook(file_path)
+        sheet = workbook.active
+        
+        positions = []
+        
+        # Iterate through all rows in column A
+        for row in range(1, sheet.max_row + 1):
+            cell_value = sheet[f'A{row}'].value
+            
+            # Check if cell contains "Position"
+            if cell_value and "Position" in str(cell_value):
+                # Extract data from the same row
+                ordnungszahl = sheet[f'B{row}'].value
+                kurztext = sheet[f'C{row}'].value
+                langtext = sheet[f'D{row}'].value
+                menge = sheet[f'E{row}'].value
+                einheit = sheet[f'F{row}'].value
+                
+                # Create position dictionary
+                position = {
+                    "ordnungszahl": str(ordnungszahl) if ordnungszahl else "",
+                    "kurztext": str(kurztext) if kurztext else "",
+                    "langtext": str(langtext) if langtext else "",
+                    "menge": menge,
+                    "einheit": str(einheit) if einheit else "Psch"
+                }
+                
+                positions.append(position)
+                print(f"✓ Found Position at row {row}: {position['kurztext']}")
+        
+        workbook.close()
+        print(f"\n📊 Total positions extracted: {len(positions)}")
+        return positions
+    
+    except Exception as e:
+        print(f"❌ Error extracting from Excel: {e}")
+        return []
+
+def estimate_prices_with_ai(positions, client):
+    """
+    Use AI to estimate prices for positions based on Langtext descriptions.
+    """
+    try:
+        print(f"\n💰 Estimating prices with AI for {len(positions)} positions...")
+        
+        # Create prompt for AI
+        positions_text = "\n\n".join([
+            f"Position {i+1}:\n"
+            f"Nummer: {pos['ordnungszahl']}\n"
+            f"Beschreibung: {pos['langtext'] or pos['kurztext']}\n"
+            f"Menge: {pos['menge']} {pos['einheit']}"
+            for i, pos in enumerate(positions)
+        ])
+        
+        prompt = f"""
+Du bist ein erfahrener Baukalkulator mit 25 Jahren Erfahrung. Analysiere JEDE Position GENAU und berechne realistische Preise.
+
+⚠️ KRITISCHE ANWEISUNG - BESCHREIBUNG SORGFÄLTIG LESEN:
+1. Lies die VOLLSTÄNDIGE Beschreibung jeder Position SORGFÄLTIG durch
+2. Identifiziere ALLE relevanten Details:
+   - Mengenangaben im Text (z.B. "600 Meter", "31.200 MeterWochen", "5 Tonnen")
+   - Zeiträume (z.B. "1 Jahr", "12 Monate", "52 Wochen")
+   - Abrechnungsgrundlagen (z.B. "Meter x Wochen", "Stunden x Tage")
+   - Zusätzliche Leistungen (Material, Wartung, Personal, Transport)
+3. BERECHNE den Preis basierend auf diesen Details
+4. Bei Pauschalpreisen (psch): Multipliziere die im Text genannten Mengen!
+
+BEISPIEL-KALKULATION:
+Beschreibung: "Bauzaun vorhalten für 600 Meter über 1 Jahr, Abrechnungsbasis: 31.200 MeterWochen"
+- Bauzaunmiete: ~8 EUR/Meter/Woche
+- Berechnung: 31.200 MeterWochen × 8 EUR = 249.600 EUR
+- + Aufstellung/Abbau: 600m × 15 EUR = 9.000 EUR
+- + Wartung (10%): 25.860 EUR
+- Gesamt: ~284.000 EUR (NICHT 1.500 EUR!)
+
+KALKULATIONSGRUNDLAGEN:
+- Material: Einkaufspreis + 3-5% Verschnitt + 10-15% Aufschlag
+- Lohn: Facharbeiter 45-55 EUR/Std, Hilfskraft 35-45 EUR/Std
+- Geräte: Tagesmiete + Betriebskosten + Vorhaltekosten
+- Transport: Entfernung + Gewicht + Ladezeit
+- BGK (Baustellengemeinkosten): 8-12% auf Lohn+Geräte
+- AGK (Allgemeine Geschäftskosten): 5-8% auf Herstellkosten
+- W&G (Wagnis & Gewinn): 3-5% auf Gesamtkosten
+
+TYPISCHE PREISREFERENZEN:
+- Baustelleneinrichtung: 2.500-8.000 EUR (abhängig von Größe)
+- Bauzaunmiete: 5-10 EUR/Meter/Woche
+- Erdaushub mit Bagger: 10-18 EUR/m³
+- Beton C25/30 liefern+einbauen: 180-260 EUR/m³
+- Mauerwerk errichten: 85-130 EUR/m²
+- Bewehrung liefern+verlegen: 1.200-1.800 EUR/t
+- Gerüstmiete: 6-12 EUR/m²/Monat
+- LKW-Transport: 2-4 EUR/km
+- Bauarbeiter-Tag: 400-550 EUR
+
+⚠️ WICHTIG - REALISTISCHE PREISE:
+- Lies JEDE Beschreibung komplett durch, bevor du einen Preis gibst
+- Beachte ALLE Mengenangaben im Text (z.B. "31.200 MeterWochen")
+- Berechne Pauschalpreise durch Multiplikation der Einzelpreise
+- Alle Preise müssen Cent-Beträge haben (45.50, 125.75, niemals 100.00)
+- Bei großen Leistungen (z.B. mehrmonatige Vorhaltung): Preise können 50.000-500.000 EUR sein!
+
+Positionen zur Kalkulation:
+{positions_text}
+
+Ausgabe NUR als JSON-Array (keine Erklärungen):
+[
+  {{"pos": "Nummer", "unit_price": Preis}},
+  ...
+]
+"""
+        
+        # Call AI with more powerful model for better price analysis
+        response, model_used = call_ai_with_retry(
+            client=client,
+            model='gemini-3-pro-preview',  # Most powerful model for best accuracy
+            contents=[prompt]
+        )
+        
+        if model_used != 'gemini-3-pro-preview':
+            print(f"   Using alternative model: {model_used}")
+        
+        # Parse JSON response
+        text = response.text.strip()
+        
+        # Extract JSON
+        if text.startswith('```'):
+            text = text.split('```')[1]
+            if text.startswith('json'):
+                text = text[4:]
+            text = text.strip()
+        
+        prices_data = json.loads(text)
+        
+        # Create price lookup dictionary
+        price_lookup = {item['pos']: float(item['unit_price']) for item in prices_data}
+        
+        # Add prices to positions
+        for pos in positions:
+            pos_num = pos['ordnungszahl']
+            pos['unit_price'] = price_lookup.get(pos_num, 0.0)
+            
+            # Ensure price is not zero
+            if pos['unit_price'] == 0.0:
+                # Fallback: estimate based on unit
+                unit = pos['einheit'].lower()
+                if 'psch' in unit or 'pau' in unit:
+                    pos['unit_price'] = 1500.50
+                elif 'm³' in unit or 'm3' in unit:
+                    pos['unit_price'] = 125.75
+                elif 'm²' in unit or 'm2' in unit:
+                    pos['unit_price'] = 65.50
+                elif 'm' in unit:
+                    pos['unit_price'] = 35.25
+                else:
+                    pos['unit_price'] = 85.50
+        
+        print(f"✓ Price estimation complete")
+        return positions
+    
+    except Exception as e:
+        print(f"⚠️ Error estimating prices: {e}")
+        # Add default prices
+        for pos in positions:
+            if 'unit_price' not in pos or pos['unit_price'] == 0:
+                pos['unit_price'] = 100.50
+        return positions
+
 def read_excel_as_text(file_path):
     """
     Read Excel file and convert to text format for AI processing.
@@ -379,7 +586,49 @@ def extract_with_ai(file_path, file_extension, client):
         # Check if file is Excel - handle differently
         ext = file_extension.lower()
         if ext in ['.xlsx', '.xls']:
-            print(f"📊 Processing Excel file locally...")
+            # First check if Excel has the expected structure
+            print(f"🔍 Checking Excel structure...")
+            has_structure = check_excel_structure(file_path)
+            
+            if has_structure:
+                print(f"✓ Excel has expected structure - using direct extraction")
+                print(f"📊 Extracting positions from Excel...")
+                
+                # Extract positions
+                positions = extract_positions_from_structured_excel(file_path)
+                
+                if positions:
+                    # Estimate prices with AI
+                    positions = estimate_prices_with_ai(positions, client)
+                    
+                    # Convert to DataFrame
+                    data = []
+                    for pos in positions:
+                        try:
+                            qty = float(pos.get('menge', 1.0)) if pos.get('menge') else 1.0
+                        except:
+                            qty = 1.0
+                        
+                        data.append({
+                            'pos': pos.get('ordnungszahl', ''),
+                            'description': pos.get('langtext', pos.get('kurztext', '')),
+                            'quantity': qty,
+                            'unit': pos.get('einheit', 'Psch'),
+                            'unit_price': pos.get('unit_price', 0.0)
+                        })
+                    
+                    df = pd.DataFrame(data)
+                    total_time = time.time() - total_start_time
+                    print(f"\n✅ Extraction complete in {total_time:.2f}s")
+                    print(f"📊 Extracted {len(df)} positions")
+                    return df
+                else:
+                    print(f"⚠️ No positions found - falling back to AI extraction")
+            else:
+                print(f"⚠️ Excel structure doesn't match - using AI extraction")
+            
+            # Fallback to original AI extraction method
+            print(f"📊 Processing Excel file with AI...")
             read_start = time.time()
             excel_text = read_excel_as_text(file_path)
             read_time = time.time() - read_start
@@ -727,10 +976,15 @@ st.set_page_config(
 )
 
 # Initialize API Client
-api_key = "AIzaSyDOYCdd7k26tClVKwz9gKQAjJaic0mNrtY"
+# Load API key from Streamlit secrets (for deployment) or environment variable (for local)
+try:
+    api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+except:
+    api_key = os.environ.get("GEMINI_API_KEY")
 
 if not api_key:
-    st.error("⚠️ API Key fehlt! Bitte in secrets.toml konfigurieren.")
+    st.error("⚠️ API Key fehlt! Bitte in Streamlit Secrets konfigurieren.")
+    st.info("💡 Für Deployment: Fügen Sie GEMINI_API_KEY in den App-Secrets hinzu.")
     st.stop()
 
 client = genai.Client(api_key=api_key)
@@ -769,6 +1023,34 @@ if "project_link" not in st.session_state:
     st.session_state.project_link = ""
 if "file_uploader_key" not in st.session_state:
     st.session_state.file_uploader_key = 0
+if "folder_location" not in st.session_state:
+    st.session_state.folder_location = os.path.expanduser("~\\Desktop")
+
+# Helper function to open folder picker dialog
+def select_folder():
+    """Open a folder picker dialog and return the selected path."""
+    try:
+        root = Tk()
+        root.withdraw()  # Hide the main window
+        root.attributes('-topmost', True)  # Bring to front
+        root.update()  # Update the window to ensure it's ready
+        
+        folder_path = filedialog.askdirectory(
+            title="Wählen Sie den Speicherort",
+            initialdir=st.session_state.folder_location,
+            parent=root
+        )
+        
+        root.update()  # Process all pending events
+        root.destroy()
+        
+        if folder_path:  # If user didn't cancel
+            st.session_state.folder_location = folder_path
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Fehler beim Öffnen des Ordner-Dialogs: {str(e)}")
+        return False
 
 # Step 1: Upload
 st.markdown("---")
@@ -1027,12 +1309,21 @@ if not st.session_state.calculation_df.empty:
         col_folder1, col_folder2 = st.columns(2)
         
         with col_folder1:
-            folder_location = st.text_input(
-                "📍 Speicherort:",
-                value=os.path.expanduser("~\\Desktop"),
-                help="Geben Sie den vollständigen Pfad ein, wo der Hauptordner erstellt werden soll",
-                key="folder_location"
-            )
+            st.markdown("**📍 Speicherort:**")
+            col_path, col_btn = st.columns([3, 1])
+            with col_path:
+                # Display the current folder location
+                st.text_input(
+                    "Ausgewählter Pfad:",
+                    value=st.session_state.folder_location,
+                    disabled=True,
+                    label_visibility="collapsed"
+                )
+            with col_btn:
+                if st.button("📁", help="Ordner auswählen", key="select_folder_btn", use_container_width=True):
+                    if select_folder():
+                        st.success("✅ Ordner ausgewählt!")
+                        st.rerun()
         
         with col_folder2:
             project_name_for_folder = st.text_input(
@@ -1041,6 +1332,9 @@ if not st.session_state.calculation_df.empty:
                 help="Geben Sie den Namen für den Hauptordner ein",
                 key="folder_name_input"
             )
+            # Update session state with current project name
+            if project_name_for_folder:
+                st.session_state.project_name = project_name_for_folder
         
         st.markdown("")
         project_link = st.text_input(
@@ -1075,6 +1369,9 @@ if not st.session_state.calculation_df.empty:
             try:
                 # Sanitize main folder name (use project name from session state)
                 safe_main_folder = sanitize_filename(project_name_for_folder)
+                
+                # Get folder location from session state
+                folder_location = st.session_state.folder_location
                 
                 # Create full path
                 main_folder_path = os.path.join(folder_location, safe_main_folder)
@@ -1120,8 +1417,8 @@ if not st.session_state.calculation_df.empty:
     st.markdown("Dateien werden automatisch im angegebenen Speicherort mit dem Projektnamen gespeichert.")
     
     # Get export location and filename from folder generator section
-    export_folder = st.session_state.get('folder_location', os.path.expanduser("~\\Desktop"))
-    export_filename_base = st.session_state.get('folder_name_input', st.session_state.project_name)
+    export_folder = st.session_state.folder_location
+    export_filename_base = st.session_state.project_name
     
     st.markdown("")
     col1, col2 = st.columns(2)
