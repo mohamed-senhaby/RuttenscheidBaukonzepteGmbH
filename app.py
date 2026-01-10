@@ -12,7 +12,6 @@ import re
 import traceback
 import time
 from google.generativeai.types import GenerationConfig
-from tkinter import Tk, filedialog
 
 # --- CONSTANTS & CONFIGURATION ---
 COMPANY_NAME = "Rüttenscheid Baukonzepte GmbH"
@@ -1020,31 +1019,11 @@ if "file_uploader_key" not in st.session_state:
 if "folder_location" not in st.session_state:
     st.session_state.folder_location = os.path.expanduser("~\\Desktop")
 
-# Helper function to open folder picker dialog
+# Helper function for folder path input (cloud-compatible)
 def select_folder():
-    """Open a folder picker dialog and return the selected path."""
-    try:
-        root = Tk()
-        root.withdraw()  # Hide the main window
-        root.attributes('-topmost', True)  # Bring to front
-        root.update()  # Update the window to ensure it's ready
-        
-        folder_path = filedialog.askdirectory(
-            title="Wählen Sie den Speicherort",
-            initialdir=st.session_state.folder_location,
-            parent=root
-        )
-        
-        root.update()  # Process all pending events
-        root.destroy()
-        
-        if folder_path:  # If user didn't cancel
-            st.session_state.folder_location = folder_path
-            return True
-        return False
-    except Exception as e:
-        st.error(f"Fehler beim Öffnen des Ordner-Dialogs: {str(e)}")
-        return False
+    """In cloud environment, folder selection not needed - files are downloaded directly."""
+    st.info("💡 In der Web-Version werden Dateien direkt heruntergeladen. Die Ordnerauswahl ist nicht verfügbar.")
+    return False
 
 # Step 1: Upload
 st.markdown("---")
