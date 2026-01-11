@@ -12,6 +12,7 @@ import re
 import traceback
 import time
 from google.generativeai.types import GenerationConfig
+import zipfile
 
 # --- CONSTANTS & CONFIGURATION ---
 COMPANY_NAME = "Rüttenscheid Baukonzepte GmbH"
@@ -1278,18 +1279,23 @@ if not st.session_state.calculation_df.empty:
     
     st.markdown("---")
     
-    # Folder Generator - Only show in local environment
-    if not is_cloud_environment():
-        with st.expander("📁 Projektordner-Generator", expanded=False):
+    # Folder Generator - Works in both environments
+    with st.expander("📁 Projektordner-Generator", expanded=False):
+        in_cloud = is_cloud_environment()
+
+        if in_cloud:
+            st.markdown("Erstellen Sie eine ZIP-Datei mit strukturierter Ordnerstruktur für Ihr Bauprojekt.")
+        else:
             st.markdown("Erstellen Sie automatisch eine strukturierte Ordnerstruktur für Ihr Bauprojekt.")
 
-            col_folder1, col_folder2 = st.columns(2)
+        col_folder1, col_folder2 = st.columns(2)
 
-            with col_folder1:
+        with col_folder1:
+            # Only show folder location selector in local environment
+            if not in_cloud:
                 st.markdown("**📍 Speicherort:**")
                 col_path, col_btn = st.columns([3, 1])
                 with col_path:
-                    # Display the current folder location
                     st.text_input(
                         "Ausgewählter Pfad:",
                         value=st.session_state.folder_location,
@@ -1301,59 +1307,88 @@ if not st.session_state.calculation_df.empty:
                         if select_folder():
                             st.success("✅ Ordner ausgewählt!")
                             st.rerun()
+            else:
+                st.markdown("**📦 Export als ZIP-Datei**")
+                st.info("Die Ordnerstruktur wird als ZIP-Datei zum Download bereitgestellt.")
 
-            with col_folder2:
-                project_name_for_folder = st.text_input(
-                    "📝 Name des Hauptordners:",
-                    value=st.session_state.project_name if st.session_state.project_name else "Neues_Projekt",
-                    help="Geben Sie den Namen für den Hauptordner ein",
-                    key="folder_name_input"
-                )
-                # Update session state with current project name
-                if project_name_for_folder:
-                    st.session_state.project_name = project_name_for_folder
-
-            st.markdown("")
-            project_link = st.text_input(
-                "🔗 Projekt-Link :",
-                value=st.session_state.project_link,
-                help="Geben Sie einen Link zum Projekt ein (z.B. Cloud-Speicher, Projektmanagement-Tool)",
-                key="project_link_input"
+        with col_folder2:
+            project_name_for_folder = st.text_input(
+                "📝 Name des Hauptordners:",
+                value=st.session_state.project_name if st.session_state.project_name else "Neues_Projekt",
+                help="Geben Sie den Namen für den Hauptordner ein",
+                key="folder_name_input"
             )
-            # Update session state
-            st.session_state.project_link = project_link
+            # Update session state with current project name
+            if project_name_for_folder:
+                st.session_state.project_name = project_name_for_folder
 
-            st.markdown("")
-            st.markdown("**Folgende Unterordner werden automatisch erstellt:**")
-            subfolder_structure = [
-                "01_Projektunterlagen",
-                "02_Angebote",
-                "03_Rechnungen",
-                "04_Vergabeunterlagen",
-                "05_Kontaktdaten",
-                "06_Nachunternehmen",
-                "07_Ausgang"
-            ]
+        st.markdown("")
+        project_link = st.text_input(
+            "🔗 Projekt-Link (optional):",
+            value=st.session_state.project_link,
+            help="Geben Sie einen Link zum Projekt ein (z.B. Cloud-Speicher, Projektmanagement-Tool)",
+            key="project_link_input"
+        )
+        # Update session state
+        st.session_state.project_link = project_link
 
-            cols = st.columns(4)
-            for idx, subfolder in enumerate(subfolder_structure):
-                with cols[idx % 4]:
-                    st.markdown(f"✓ {subfolder}")
+        st.markdown("")
+        st.markdown("**Folgende Unterordner werden automatisch erstellt:**")
+        subfolder_structure = [
+            "01_Projektunterlagen",
+            "02_Angebote",
+            "03_Rechnungen",
+            "04_Vergabeunterlagen",
+            "05_Kontaktdaten",
+            "06_Nachunternehmen",
+            "07_Ausgang"
+        ]
 
-            st.markdown("")
+        cols = st.columns(4)
+        for idx, subfolder in enumerate(subfolder_structure):
+            with cols[idx % 4]:
+                st.markdown(f"✓ {subfolder}")
 
+        st.markdown("")
+
+        # Cloud environment: Create ZIP file
+        if in_cloud:
+            # Prepare ZIP file
+            zip_buffer = io.BytesIO()
+            safe_main_folder = sanitize_filename(project_name_for_folder)
+
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                # Create empty folders by adding a placeholder file
+                for subfolder in subfolder_structure:
+                    folder_path = f"{safe_main_folder}/{subfolder}/"
+                    # Add a .gitkeep file to preserve empty folders
+                    zip_file.writestr(f"{folder_path}.gitkeep", "")
+
+                # Add project link file if provided
+                if st.session_state.project_link and st.session_state.project_link.strip():
+                    link_filename = f"{safe_main_folder}/Projekt_Link.txt"
+                    zip_file.writestr(link_filename, st.session_state.project_link)
+
+            zip_filename = f"{safe_main_folder}_Ordnerstruktur.zip"
+
+            st.download_button(
+                label="📦 Ordnerstruktur als ZIP herunterladen",
+                data=zip_buffer.getvalue(),
+                file_name=zip_filename,
+                mime="application/zip",
+                use_container_width=True,
+                type="primary",
+                key="download_folder_structure"
+            )
+
+        # Local environment: Create folders directly
+        else:
             if st.button("🗂️ Ordnerstruktur erstellen", use_container_width=True, type="primary", key="create_folders"):
                 try:
-                    # Sanitize main folder name (use project name from session state)
                     safe_main_folder = sanitize_filename(project_name_for_folder)
-
-                    # Get folder location from session state
                     folder_location = st.session_state.folder_location
-
-                    # Create full path
                     main_folder_path = os.path.join(folder_location, safe_main_folder)
 
-                    # Check if location exists
                     if not os.path.exists(folder_location):
                         st.error(f"❌ Der Speicherort existiert nicht: {folder_location}")
                     elif os.path.exists(main_folder_path):
@@ -1363,11 +1398,9 @@ if not st.session_state.calculation_df.empty:
                         os.makedirs(main_folder_path, exist_ok=True)
 
                         # Create subfolders
-                        created_folders = []
                         for subfolder in subfolder_structure:
                             subfolder_path = os.path.join(main_folder_path, subfolder)
                             os.makedirs(subfolder_path, exist_ok=True)
-                            created_folders.append(subfolder)
 
                         # Create project link text file if link is provided
                         if st.session_state.project_link and st.session_state.project_link.strip():
