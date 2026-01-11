@@ -1358,14 +1358,16 @@ if not st.session_state.calculation_df.empty:
             safe_main_folder = sanitize_filename(project_name_for_folder)
 
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                # Create empty folders by adding a placeholder file
+                # Create empty folders without placeholder files
+                # Don't use project name prefix - it's already in the ZIP filename
                 for subfolder in subfolder_structure:
-                    folder_path = f"{safe_main_folder}/{subfolder}/"
-                    # Add a .gitkeep file to preserve empty folders
-                    zip_file.writestr(f"{folder_path}.gitkeep", "")
+                    folder_path = f"{subfolder}/"
+                    # Create the folder entry in the ZIP (empty directory)
+                    zip_info = zipfile.ZipInfo(folder_path)
+                    zip_file.writestr(zip_info, "")
 
-                # Always add project link file
-                link_filename = f"{safe_main_folder}/Projekt_Link.txt"
+                # Always add project link file at root of ZIP
+                link_filename = "Projekt_Link.txt"
                 if st.session_state.project_link and st.session_state.project_link.strip():
                     link_content = f"Projekt-Link:\n{st.session_state.project_link}\n\nProjektname: {project_name_for_folder}\nErstellt am: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
                 else:
