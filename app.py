@@ -1022,8 +1022,11 @@ if "folder_location" not in st.session_state:
 # Helper function for folder path input (cloud-compatible)
 def select_folder():
     """In cloud environment, folder selection not needed - files are downloaded directly."""
-    st.info("💡 In der Web-Version werden Dateien direkt heruntergeladen. Die Ordnerauswahl ist nicht verfügbar.")
     return False
+
+def is_cloud_environment():
+    """Check if running in Streamlit Cloud"""
+    return not os.path.exists(os.path.expanduser("~\\Desktop"))
 
 # Step 1: Upload
 st.markdown("---")
@@ -1275,284 +1278,317 @@ if not st.session_state.calculation_df.empty:
     
     st.markdown("---")
     
-    # Folder Generator
-    with st.expander("📁 Projektordner-Generator", expanded=False):
-        st.markdown("Erstellen Sie automatisch eine strukturierte Ordnerstruktur für Ihr Bauprojekt.")
-        
-        col_folder1, col_folder2 = st.columns(2)
-        
-        with col_folder1:
-            st.markdown("**📍 Speicherort:**")
-            col_path, col_btn = st.columns([3, 1])
-            with col_path:
-                # Display the current folder location
-                st.text_input(
-                    "Ausgewählter Pfad:",
-                    value=st.session_state.folder_location,
-                    disabled=True,
-                    label_visibility="collapsed"
+    # Folder Generator - Only show in local environment
+    if not is_cloud_environment():
+        with st.expander("📁 Projektordner-Generator", expanded=False):
+            st.markdown("Erstellen Sie automatisch eine strukturierte Ordnerstruktur für Ihr Bauprojekt.")
+
+            col_folder1, col_folder2 = st.columns(2)
+
+            with col_folder1:
+                st.markdown("**📍 Speicherort:**")
+                col_path, col_btn = st.columns([3, 1])
+                with col_path:
+                    # Display the current folder location
+                    st.text_input(
+                        "Ausgewählter Pfad:",
+                        value=st.session_state.folder_location,
+                        disabled=True,
+                        label_visibility="collapsed"
+                    )
+                with col_btn:
+                    if st.button("📁", help="Ordner auswählen", key="select_folder_btn", use_container_width=True):
+                        if select_folder():
+                            st.success("✅ Ordner ausgewählt!")
+                            st.rerun()
+
+            with col_folder2:
+                project_name_for_folder = st.text_input(
+                    "📝 Name des Hauptordners:",
+                    value=st.session_state.project_name if st.session_state.project_name else "Neues_Projekt",
+                    help="Geben Sie den Namen für den Hauptordner ein",
+                    key="folder_name_input"
                 )
-            with col_btn:
-                if st.button("📁", help="Ordner auswählen", key="select_folder_btn", use_container_width=True):
-                    if select_folder():
-                        st.success("✅ Ordner ausgewählt!")
-                        st.rerun()
-        
-        with col_folder2:
-            project_name_for_folder = st.text_input(
-                "📝 Name des Hauptordners:",
-                value=st.session_state.project_name if st.session_state.project_name else "Neues_Projekt",
-                help="Geben Sie den Namen für den Hauptordner ein",
-                key="folder_name_input"
+                # Update session state with current project name
+                if project_name_for_folder:
+                    st.session_state.project_name = project_name_for_folder
+
+            st.markdown("")
+            project_link = st.text_input(
+                "🔗 Projekt-Link :",
+                value=st.session_state.project_link,
+                help="Geben Sie einen Link zum Projekt ein (z.B. Cloud-Speicher, Projektmanagement-Tool)",
+                key="project_link_input"
             )
-            # Update session state with current project name
-            if project_name_for_folder:
-                st.session_state.project_name = project_name_for_folder
-        
-        st.markdown("")
-        project_link = st.text_input(
-            "🔗 Projekt-Link :",
-            value=st.session_state.project_link,
-            help="Geben Sie einen Link zum Projekt ein (z.B. Cloud-Speicher, Projektmanagement-Tool)",
-            key="project_link_input"
-        )
-        # Update session state
-        st.session_state.project_link = project_link
-        
-        st.markdown("")
-        st.markdown("**Folgende Unterordner werden automatisch erstellt:**")
-        subfolder_structure = [
-            "01_Projektunterlagen",
-            "02_Angebote",
-            "03_Rechnungen",
-            "04_Vergabeunterlagen",
-            "05_Kontaktdaten",
-            "06_Nachunternehmen",
-            "07_Ausgang"
-        ]
-        
-        cols = st.columns(4)
-        for idx, subfolder in enumerate(subfolder_structure):
-            with cols[idx % 4]:
-                st.markdown(f"✓ {subfolder}")
-        
-        st.markdown("")
-        
-        if st.button("🗂️ Ordnerstruktur erstellen", use_container_width=True, type="primary", key="create_folders"):
-            try:
-                # Sanitize main folder name (use project name from session state)
-                safe_main_folder = sanitize_filename(project_name_for_folder)
-                
-                # Get folder location from session state
-                folder_location = st.session_state.folder_location
-                
-                # Create full path
-                main_folder_path = os.path.join(folder_location, safe_main_folder)
-                
-                # Check if location exists
-                if not os.path.exists(folder_location):
-                    st.error(f"❌ Der Speicherort existiert nicht: {folder_location}")
-                elif os.path.exists(main_folder_path):
-                    st.warning(f"⚠️ Der Ordner existiert bereits: {main_folder_path}")
-                else:
-                    # Create main folder
-                    os.makedirs(main_folder_path, exist_ok=True)
-                    
-                    # Create subfolders
-                    created_folders = []
-                    for subfolder in subfolder_structure:
-                        subfolder_path = os.path.join(main_folder_path, subfolder)
-                        os.makedirs(subfolder_path, exist_ok=True)
-                        created_folders.append(subfolder)
-                    
-                    # Create project link text file if link is provided
-                    if st.session_state.project_link and st.session_state.project_link.strip():
-                        link_filename = f"Projekt_Link_{safe_main_folder}.txt"
-                        link_filepath = os.path.join(main_folder_path, link_filename)
-                        with open(link_filepath, 'w', encoding='utf-8') as f:
-                            f.write(f"{st.session_state.project_link}\n")
-                    
-                    st.success(f"✅ **Erfolgreich erstellt!**")
-                    if st.session_state.project_link and st.session_state.project_link.strip():
-                        st.success(f"✅ **Projekt-Link gespeichert!**")
-                    st.info(f"📂 Hauptordner: `{main_folder_path}`")
-                    
-            except PermissionError:
-                st.error(f"❌ Keine Berechtigung zum Erstellen von Ordnern in: {folder_location}")
-            except Exception as e:
-                st.error(f"❌ Fehler beim Erstellen der Ordnerstruktur: {str(e)}")
+            # Update session state
+            st.session_state.project_link = project_link
+
+            st.markdown("")
+            st.markdown("**Folgende Unterordner werden automatisch erstellt:**")
+            subfolder_structure = [
+                "01_Projektunterlagen",
+                "02_Angebote",
+                "03_Rechnungen",
+                "04_Vergabeunterlagen",
+                "05_Kontaktdaten",
+                "06_Nachunternehmen",
+                "07_Ausgang"
+            ]
+
+            cols = st.columns(4)
+            for idx, subfolder in enumerate(subfolder_structure):
+                with cols[idx % 4]:
+                    st.markdown(f"✓ {subfolder}")
+
+            st.markdown("")
+
+            if st.button("🗂️ Ordnerstruktur erstellen", use_container_width=True, type="primary", key="create_folders"):
+                try:
+                    # Sanitize main folder name (use project name from session state)
+                    safe_main_folder = sanitize_filename(project_name_for_folder)
+
+                    # Get folder location from session state
+                    folder_location = st.session_state.folder_location
+
+                    # Create full path
+                    main_folder_path = os.path.join(folder_location, safe_main_folder)
+
+                    # Check if location exists
+                    if not os.path.exists(folder_location):
+                        st.error(f"❌ Der Speicherort existiert nicht: {folder_location}")
+                    elif os.path.exists(main_folder_path):
+                        st.warning(f"⚠️ Der Ordner existiert bereits: {main_folder_path}")
+                    else:
+                        # Create main folder
+                        os.makedirs(main_folder_path, exist_ok=True)
+
+                        # Create subfolders
+                        created_folders = []
+                        for subfolder in subfolder_structure:
+                            subfolder_path = os.path.join(main_folder_path, subfolder)
+                            os.makedirs(subfolder_path, exist_ok=True)
+                            created_folders.append(subfolder)
+
+                        # Create project link text file if link is provided
+                        if st.session_state.project_link and st.session_state.project_link.strip():
+                            link_filename = f"Projekt_Link_{safe_main_folder}.txt"
+                            link_filepath = os.path.join(main_folder_path, link_filename)
+                            with open(link_filepath, 'w', encoding='utf-8') as f:
+                                f.write(f"{st.session_state.project_link}\n")
+
+                        st.success(f"✅ **Erfolgreich erstellt!**")
+                        if st.session_state.project_link and st.session_state.project_link.strip():
+                            st.success(f"✅ **Projekt-Link gespeichert!**")
+                        st.info(f"📂 Hauptordner: `{main_folder_path}`")
+
+                except PermissionError:
+                    st.error(f"❌ Keine Berechtigung zum Erstellen von Ordnern in: {folder_location}")
+                except Exception as e:
+                    st.error(f"❌ Fehler beim Erstellen der Ordnerstruktur: {str(e)}")
     
     
     # Step 3: Export
     st.markdown("---")
     st.subheader("📥 Schritt 3: Angebot exportieren")
-    
-    st.markdown("Dateien werden automatisch im angegebenen Speicherort mit dem Projektnamen gespeichert.")
-    
-    # Get export location and filename from folder generator section
-    export_folder = st.session_state.folder_location
-    export_filename_base = st.session_state.project_name
-    
+
+    # Project name input for all environments
+    st.markdown("")
+    export_filename_base = st.text_input(
+        "📝 Projektname für Export:",
+        value=st.session_state.project_name if st.session_state.project_name else "Bauprojekt",
+        help="Dieser Name wird für die exportierten Dateien verwendet",
+        key="export_project_name"
+    )
+    st.session_state.project_name = export_filename_base
+
+    # Check environment for different export methods
+    in_cloud = is_cloud_environment()
+
+    if in_cloud:
+        st.info("💡 Dateien werden direkt an Ihren Browser zum Download gesendet.")
+    else:
+        st.markdown("Dateien werden automatisch im angegebenen Speicherort mit dem Projektnamen gespeichert.")
+        export_folder = st.session_state.folder_location
+
     st.markdown("")
     col1, col2 = st.columns(2)
     
     with col1:
         # Excel Export with proper German number formatting
-        if st.button("💾 Excel speichern", use_container_width=True, type="primary"):
-            try:
-                # Sanitize project folder name
-                safe_project_folder = sanitize_filename(export_filename_base)
-                # Create full project folder path
-                project_folder_path = os.path.join(export_folder, safe_project_folder)
-                
-                # Check if base export folder exists
-                if not os.path.exists(export_folder):
-                    st.error(f"❌ Der Speicherort existiert nicht: {export_folder}")
-                else:
-                    # Create project folder if it doesn't exist
-                    os.makedirs(project_folder_path, exist_ok=True)
-                    
-                    excel_buffer = io.BytesIO()
+        # Prepare Excel data
+        excel_buffer = io.BytesIO()
 
-                    # Prepare export dataframe with German-formatted text
-                    export_df = edited_df[['pos', 'description', 'quantity', 'unit', 'unit_price']].copy()
-                    # Calculate GP with price factor
-                    if 'price_factor' in edited_df.columns:
-                        export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price'] * edited_df['price_factor']
+        # Prepare export dataframe with German-formatted text
+        export_df = edited_df[['pos', 'description', 'quantity', 'unit', 'unit_price']].copy()
+        # Calculate GP with price factor
+        if 'price_factor' in edited_df.columns:
+            export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price'] * edited_df['price_factor']
+        else:
+            export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price']
+
+        # Convert numeric columns to German-formatted text strings
+        export_df['quantity'] = export_df['quantity'].apply(lambda x: format_german_number(x, 2))
+        export_df['unit_price'] = export_df['unit_price'].apply(lambda x: format_german_number(x, 2))
+        export_df['total_price'] = export_df['total_price'].apply(lambda x: format_german_number(x, 2))
+
+        # Rename columns to German
+        export_df.columns = ['Pos.', 'Leistungsbezeichnung', 'Menge', 'Einheit', 'EP netto (€)', 'GP netto (€)']
+
+        # Write to Excel
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            export_df.to_excel(writer, index=False, sheet_name='Kalkulation')
+
+            # Get the worksheet for styling
+            worksheet = writer.sheets['Kalkulation']
+
+            # Clean up values and set as text
+            from openpyxl.styles import Alignment
+            from openpyxl.cell.cell import TYPE_STRING
+
+            for row in range(2, len(export_df) + 2):
+                # Menge (column C/3)
+                cell_c = worksheet.cell(row=row, column=3)
+                clean_value_c = str(cell_c.value).lstrip("'") if cell_c.value else ""
+                cell_c.value = clean_value_c
+                cell_c.data_type = TYPE_STRING
+                cell_c.alignment = Alignment(horizontal='right')
+
+                # EP netto (column E/5)
+                cell_e = worksheet.cell(row=row, column=5)
+                clean_value_e = str(cell_e.value).lstrip("'") if cell_e.value else ""
+                cell_e.value = clean_value_e
+                cell_e.data_type = TYPE_STRING
+                cell_e.alignment = Alignment(horizontal='right')
+
+                # GP netto (column F/6)
+                cell_f = worksheet.cell(row=row, column=6)
+                clean_value_f = str(cell_f.value).lstrip("'") if cell_f.value else ""
+                cell_f.value = clean_value_f
+                cell_f.data_type = TYPE_STRING
+                cell_f.alignment = Alignment(horizontal='right')
+
+            # Adjust column widths
+            worksheet.column_dimensions['A'].width = 12
+            worksheet.column_dimensions['B'].width = 50
+            worksheet.column_dimensions['C'].width = 15
+            worksheet.column_dimensions['D'].width = 10
+            worksheet.column_dimensions['E'].width = 18
+            worksheet.column_dimensions['F'].width = 18
+
+        # Sanitize filename
+        safe_filename = sanitize_filename(export_filename_base)
+        excel_filename = f"Kalkulation_{safe_filename}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+
+        # Cloud environment: Use download button
+        if in_cloud:
+            st.download_button(
+                label="💾 Excel herunterladen",
+                data=excel_buffer.getvalue(),
+                file_name=excel_filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="primary"
+            )
+        # Local environment: Save to file
+        else:
+            if st.button("💾 Excel speichern", use_container_width=True, type="primary"):
+                try:
+                    safe_project_folder = sanitize_filename(export_filename_base)
+                    project_folder_path = os.path.join(export_folder, safe_project_folder)
+
+                    if not os.path.exists(export_folder):
+                        st.error(f"❌ Der Speicherort existiert nicht: {export_folder}")
                     else:
-                        export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price']
+                        os.makedirs(project_folder_path, exist_ok=True)
+                        excel_filepath = os.path.join(project_folder_path, excel_filename)
 
-                    # Convert numeric columns to German-formatted text strings
-                    # This ensures copy-paste preserves the German format
-                    export_df['quantity'] = export_df['quantity'].apply(lambda x: format_german_number(x, 2))
-                    export_df['unit_price'] = export_df['unit_price'].apply(lambda x: format_german_number(x, 2))
-                    export_df['total_price'] = export_df['total_price'].apply(lambda x: format_german_number(x, 2))
+                        with open(excel_filepath, 'wb') as f:
+                            f.write(excel_buffer.getvalue())
 
-                    # Rename columns to German
-                    export_df.columns = ['Pos.', 'Leistungsbezeichnung', 'Menge', 'Einheit', 'EP netto (€)', 'GP netto (€)']
-
-                    # Write to Excel
-                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                        export_df.to_excel(writer, index=False, sheet_name='Kalkulation')
-
-                        # Get the worksheet for styling
-                        worksheet = writer.sheets['Kalkulation']
-
-                        # Clean up values and set as text - remove any leading apostrophes
-                        from openpyxl.styles import Alignment
-                        from openpyxl.cell.cell import TYPE_STRING
-
-                        for row in range(2, len(export_df) + 2):
-                            # Menge (column C/3) - Clean value and set as text
-                            cell_c = worksheet.cell(row=row, column=3)
-                            # Remove leading apostrophe if exists
-                            clean_value_c = str(cell_c.value).lstrip("'") if cell_c.value else ""
-                            cell_c.value = clean_value_c
-                            cell_c.data_type = TYPE_STRING
-                            cell_c.alignment = Alignment(horizontal='right')
-
-                            # EP netto (column E/5) - Clean value and set as text
-                            cell_e = worksheet.cell(row=row, column=5)
-                            clean_value_e = str(cell_e.value).lstrip("'") if cell_e.value else ""
-                            cell_e.value = clean_value_e
-                            cell_e.data_type = TYPE_STRING
-                            cell_e.alignment = Alignment(horizontal='right')
-
-                            # GP netto (column F/6) - Clean value and set as text
-                            cell_f = worksheet.cell(row=row, column=6)
-                            clean_value_f = str(cell_f.value).lstrip("'") if cell_f.value else ""
-                            cell_f.value = clean_value_f
-                            cell_f.data_type = TYPE_STRING
-                            cell_f.alignment = Alignment(horizontal='right')
-
-                        # Adjust column widths for better readability
-                        worksheet.column_dimensions['A'].width = 12  # Pos.
-                        worksheet.column_dimensions['B'].width = 50  # Leistungsbezeichnung
-                        worksheet.column_dimensions['C'].width = 15  # Menge
-                        worksheet.column_dimensions['D'].width = 10  # Einheit
-                        worksheet.column_dimensions['E'].width = 18  # EP netto
-                        worksheet.column_dimensions['F'].width = 18  # GP netto
-                    
-                    # Sanitize filename
-                    safe_filename = sanitize_filename(export_filename_base)
-                    
-                    # Create full file path inside project folder
-                    excel_filename = f"Kalkulation_{safe_filename}_{datetime.now().strftime('%Y%m%d')}.xlsx"
-                    excel_filepath = os.path.join(project_folder_path, excel_filename)
-                    
-                    # Write to file
-                    with open(excel_filepath, 'wb') as f:
-                        f.write(excel_buffer.getvalue())
-                    
-                    # Create project link text file if link is provided
-                    if st.session_state.project_link and st.session_state.project_link.strip():
-                        link_filename = f"Projekt_Link_{safe_filename}.txt"
-                        link_filepath = os.path.join(project_folder_path, link_filename)
-                        with open(link_filepath, 'w', encoding='utf-8') as f:
-                            f.write(f"{st.session_state.project_link}\n")
-                    
-                    st.success(f"✅ **Excel gespeichert!**")
-                    if st.session_state.project_link and st.session_state.project_link.strip():
-                        st.success(f"✅ **Projekt-Link gespeichert!**")
-                    st.info(f"📂 Speicherort: `{excel_filepath}`")
-                    
-            except PermissionError:
-                st.error(f"❌ Keine Berechtigung zum Schreiben in: {export_folder}")
-            except Exception as e:
-                st.error(f"❌ Excel-Fehler: {str(e)}")
-    
-    with col2:
-        # PDF Export
-        if st.button("📄 PDF speichern", use_container_width=True, type="primary"):
-            # Sanitize project folder name
-            safe_project_folder = sanitize_filename(export_filename_base)
-            # Create full project folder path
-            project_folder_path = os.path.join(export_folder, safe_project_folder)
-            
-            # Check if base export folder exists
-            if not os.path.exists(export_folder):
-                st.error(f"❌ Der Speicherort existiert nicht: {export_folder}")
-            else:
-                # Create project folder if it doesn't exist
-                os.makedirs(project_folder_path, exist_ok=True)
-                
-                with st.spinner("Erstelle PDF..."):
-                    try:
-                        # Prepare dataframe for PDF with calculated total prices
-                        pdf_df = edited_df.copy()
-                        if 'price_factor' in pdf_df.columns:
-                            pdf_df['total_price'] = pdf_df['quantity'] * pdf_df['unit_price'] * pdf_df['price_factor']
-                        
-                        # Use export_filename_base for the project name in PDF
-                        pdf_bytes = generate_offer_pdf(pdf_df, export_filename_base)
-                        
-                        # Sanitize filename
-                        safe_filename = sanitize_filename(export_filename_base)
-                        
-                        # Create full file path inside project folder
-                        pdf_filename = f"Angebot_{safe_filename}_{datetime.now().strftime('%Y%m%d')}.pdf"
-                        pdf_filepath = os.path.join(project_folder_path, pdf_filename)
-                        
-                        # Write to file
-                        with open(pdf_filepath, 'wb') as f:
-                            f.write(pdf_bytes)
-                        
-                        # Create project link text file if link is provided
                         if st.session_state.project_link and st.session_state.project_link.strip():
                             link_filename = f"Projekt_Link_{safe_filename}.txt"
                             link_filepath = os.path.join(project_folder_path, link_filename)
                             with open(link_filepath, 'w', encoding='utf-8') as f:
                                 f.write(f"{st.session_state.project_link}\n")
-                        
+
+                        st.success(f"✅ **Excel gespeichert!**")
+                        if st.session_state.project_link and st.session_state.project_link.strip():
+                            st.success(f"✅ **Projekt-Link gespeichert!**")
+                        st.info(f"📂 Speicherort: `{excel_filepath}`")
+
+                except PermissionError:
+                    st.error(f"❌ Keine Berechtigung zum Schreiben in: {export_folder}")
+                except Exception as e:
+                    st.error(f"❌ Excel-Fehler: {str(e)}")
+    
+    with col2:
+        # PDF Export
+        # Prepare PDF data
+        with st.spinner("Erstelle PDF..."):
+            try:
+                # Prepare dataframe for PDF with calculated total prices
+                pdf_df = edited_df.copy()
+                if 'price_factor' in pdf_df.columns:
+                    pdf_df['total_price'] = pdf_df['quantity'] * pdf_df['unit_price'] * pdf_df['price_factor']
+
+                # Generate PDF
+                pdf_bytes = generate_offer_pdf(pdf_df, export_filename_base)
+
+                # Sanitize filename
+                safe_filename = sanitize_filename(export_filename_base)
+                pdf_filename = f"Angebot_{safe_filename}_{datetime.now().strftime('%Y%m%d')}.pdf"
+
+                # Cloud environment: Use download button
+                if in_cloud:
+                    st.download_button(
+                        label="📄 PDF herunterladen",
+                        data=pdf_bytes,
+                        file_name=pdf_filename,
+                        mime="application/pdf",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                # Local environment: Save to file with button
+                else:
+                    # Store pdf_bytes in session state for the button
+                    if 'pdf_data' not in st.session_state:
+                        st.session_state.pdf_data = pdf_bytes
+                        st.session_state.pdf_filename = pdf_filename
+
+            except Exception as e:
+                st.error(f"❌ PDF-Fehler beim Erstellen: {str(e)}")
+
+        # Local save button (outside spinner)
+        if not in_cloud:
+            if st.button("📄 PDF speichern", use_container_width=True, type="primary", key="pdf_save_btn"):
+                try:
+                    safe_project_folder = sanitize_filename(export_filename_base)
+                    project_folder_path = os.path.join(export_folder, safe_project_folder)
+
+                    if not os.path.exists(export_folder):
+                        st.error(f"❌ Der Speicherort existiert nicht: {export_folder}")
+                    else:
+                        os.makedirs(project_folder_path, exist_ok=True)
+                        pdf_filepath = os.path.join(project_folder_path, st.session_state.pdf_filename)
+
+                        with open(pdf_filepath, 'wb') as f:
+                            f.write(st.session_state.pdf_data)
+
+                        if st.session_state.project_link and st.session_state.project_link.strip():
+                            link_filename = f"Projekt_Link_{safe_filename}.txt"
+                            link_filepath = os.path.join(project_folder_path, link_filename)
+                            with open(link_filepath, 'w', encoding='utf-8') as f:
+                                f.write(f"{st.session_state.project_link}\n")
+
                         st.success(f"✅ **PDF gespeichert!**")
                         if st.session_state.project_link and st.session_state.project_link.strip():
                             st.success(f"✅ **Projekt-Link gespeichert!**")
                         st.info(f"📂 Speicherort: `{pdf_filepath}`")
-                        
-                    except PermissionError:
-                        st.error(f"❌ Keine Berechtigung zum Schreiben in: {export_folder}")
-                    except Exception as e:
-                        st.error(f"❌ PDF-Fehler: {str(e)}")
+
+                except PermissionError:
+                    st.error(f"❌ Keine Berechtigung zum Schreiben in: {export_folder}")
+                except Exception as e:
+                    st.error(f"❌ PDF-Fehler: {str(e)}")
 
 else:
     st.markdown("""

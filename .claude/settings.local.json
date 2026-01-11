@@ -4,7 +4,9 @@
       "Bash(python:*)",
       "Bash(where:*)",
       "Bash(python3:*)",
-      "Bash(streamlit:*)"
+      "Bash(streamlit:*)",
+      "Bash(.venvScriptspython -m py_compile app.py)",
+      "Bash(dir:*)"
     ]
   }
 }
