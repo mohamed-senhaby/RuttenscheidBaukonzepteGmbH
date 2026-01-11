@@ -1316,21 +1316,18 @@ if not st.session_state.calculation_df.empty:
                 "📝 Name des Hauptordners:",
                 value=st.session_state.project_name if st.session_state.project_name else "Neues_Projekt",
                 help="Geben Sie den Namen für den Hauptordner ein",
-                key="folder_name_input"
+                key="folder_name_input",
+                on_change=lambda: setattr(st.session_state, 'project_name', st.session_state.folder_name_input)
             )
-            # Update session state with current project name
-            if project_name_for_folder:
-                st.session_state.project_name = project_name_for_folder
 
         st.markdown("")
         project_link = st.text_input(
             "🔗 Projekt-Link (optional):",
-            value=st.session_state.project_link,
+            value=st.session_state.project_link if st.session_state.project_link else "",
             help="Geben Sie einen Link zum Projekt ein (z.B. Cloud-Speicher, Projektmanagement-Tool)",
-            key="project_link_input"
+            key="project_link_input",
+            on_change=lambda: setattr(st.session_state, 'project_link', st.session_state.project_link_input)
         )
-        # Update session state
-        st.session_state.project_link = project_link
 
         st.markdown("")
         st.markdown("**Folgende Unterordner werden automatisch erstellt:**")
@@ -1355,6 +1352,7 @@ if not st.session_state.calculation_df.empty:
         if in_cloud:
             # Prepare ZIP file
             zip_buffer = io.BytesIO()
+            project_name_for_folder = st.session_state.folder_name_input
             safe_main_folder = sanitize_filename(project_name_for_folder)
 
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -1415,6 +1413,7 @@ if not st.session_state.calculation_df.empty:
         else:
             if st.button("🗂️ Ordnerstruktur erstellen", use_container_width=True, type="primary", key="create_folders"):
                 try:
+                    project_name_for_folder = st.session_state.folder_name_input
                     safe_main_folder = sanitize_filename(project_name_for_folder)
                     folder_location = st.session_state.folder_location
                     main_folder_path = os.path.join(folder_location, safe_main_folder)
