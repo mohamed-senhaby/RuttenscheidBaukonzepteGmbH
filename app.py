@@ -1364,22 +1364,50 @@ if not st.session_state.calculation_df.empty:
                     # Add a .gitkeep file to preserve empty folders
                     zip_file.writestr(f"{folder_path}.gitkeep", "")
 
-                # Add project link file if provided
+                # Always add project link file
+                link_filename = f"{safe_main_folder}/Projekt_Link.txt"
                 if st.session_state.project_link and st.session_state.project_link.strip():
-                    link_filename = f"{safe_main_folder}/Projekt_Link.txt"
-                    zip_file.writestr(link_filename, st.session_state.project_link)
+                    link_content = f"Projekt-Link:\n{st.session_state.project_link}\n\nProjektname: {project_name_for_folder}\nErstellt am: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+                else:
+                    link_content = f"Projektname: {project_name_for_folder}\nErstellt am: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\nHinweis: Kein Projekt-Link angegeben."
+                zip_file.writestr(link_filename, link_content)
 
-            zip_filename = f"{safe_main_folder}_Ordnerstruktur.zip"
+            zip_filename = f"{safe_main_folder}.zip"
 
-            st.download_button(
-                label="📦 Ordnerstruktur als ZIP herunterladen",
-                data=zip_buffer.getvalue(),
-                file_name=zip_filename,
-                mime="application/zip",
-                use_container_width=True,
-                type="primary",
-                key="download_folder_structure"
-            )
+            col_zip1, col_zip2 = st.columns(2)
+            with col_zip1:
+                st.download_button(
+                    label="📦 Ordnerstruktur als ZIP herunterladen",
+                    data=zip_buffer.getvalue(),
+                    file_name=zip_filename,
+                    mime="application/zip",
+                    use_container_width=True,
+                    type="primary",
+                    key="download_folder_structure"
+                )
+
+            # Show what's included and provide separate project link download
+            with col_zip2:
+                st.markdown("**📋 Im ZIP enthalten:**")
+                st.markdown(f"✓ {len(subfolder_structure)} Unterordner")
+                st.markdown("✓ Projekt_Link.txt")
+                if st.session_state.project_link and st.session_state.project_link.strip():
+                    st.success("✓ Mit Projekt-Link")
+                else:
+                    st.info("ℹ️ Ohne Projekt-Link")
+
+            # Additional option: Download project link file separately
+            if st.session_state.project_link and st.session_state.project_link.strip():
+                st.markdown("")
+                link_file_content = f"Projekt-Link:\n{st.session_state.project_link}\n\nProjektname: {project_name_for_folder}\nErstellt am: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+                st.download_button(
+                    label="📄 Nur Projekt-Link.txt herunterladen",
+                    data=link_file_content,
+                    file_name=f"Projekt_Link_{safe_main_folder}.txt",
+                    mime="text/plain",
+                    use_container_width=False,
+                    key="download_project_link_only"
+                )
 
         # Local environment: Create folders directly
         else:
