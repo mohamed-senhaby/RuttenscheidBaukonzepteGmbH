@@ -348,27 +348,40 @@ def sanitize_filename(filename):
 def check_excel_structure(file_path):
     """
     Check if Excel file has the expected structure for direct extraction.
-    Returns True if structure matches (Position in col A).
+    Returns True if structure matches (Position in col A OR Ordnungszahl in col B).
     """
     try:
         workbook = openpyxl.load_workbook(file_path)
         sheet = workbook.active
-        
-        # Check if we can find "Position" in column A
+
+        # Strategy 1: Check for "Position" in column A
         position_count = 0
-        for row in range(1, min(50, sheet.max_row + 1)):  # Check first 50 rows
+        for row in range(1, min(50, sheet.max_row + 1)):
             cell_value = sheet[f'A{row}'].value
-            if cell_value and "Position" in str(cell_value):
-                position_count += 1
-                # If we find at least 1 position, consider it valid
-                if position_count >= 1:
-                    workbook.close()
-                    print(f"✓ Found {position_count} Position(s) in column A - structure detected")
-                    return True
-        
+            if cell_value:
+                cell_str = str(cell_value).strip().lower()
+                if "position" in cell_str or cell_str.startswith("pos"):
+                    position_count += 1
+                    print(f"[OK] Found position marker at row {row}: '{cell_value}'")
+                    if position_count >= 1:
+                        workbook.close()
+                        print(f"[OK] Found {position_count} Position(s) in column A - structure detected")
+                        return True
+
+        # Strategy 2: Check for "Ordnungszahl" header structure
+        for row in range(1, min(20, sheet.max_row + 1)):
+            cell_b = str(sheet[f'B{row}'].value or "").strip().lower()
+            cell_c = str(sheet[f'C{row}'].value or "").strip().lower()
+            cell_d = str(sheet[f'D{row}'].value or "").strip().lower()
+
+            # Look for the typical German structure: Ordnungszahl | Kurztext | Langtext
+            if "ordnungszahl" in cell_b and "kurztext" in cell_c and "langtext" in cell_d:
+                workbook.close()
+                print(f"[OK] Found German LV structure at row {row}: Ordnungszahl | Kurztext | Langtext")
+                return True
+
         workbook.close()
-        if position_count == 0:
-            print(f"⚠️ No 'Position' entries found in column A")
+        print(f"⚠️ No matching structure found")
         return False
     except Exception as e:
         print(f"Error checking Excel structure: {e}")
@@ -377,45 +390,89 @@ def check_excel_structure(file_path):
 def extract_positions_from_structured_excel(file_path):
     """
     Extract positions from Excel file with known structure.
+    Supports two formats:
+    1. Position in column A (old format)
+    2. Typ | Ordnungszahl | Kurztext | Langtext (German LV format)
     Returns list of dictionaries with position data.
     """
     try:
         workbook = openpyxl.load_workbook(file_path)
         sheet = workbook.active
-        
         positions = []
-        
-        # Iterate through all rows in column A
-        for row in range(1, sheet.max_row + 1):
-            cell_value = sheet[f'A{row}'].value
-            
-            # Check if cell contains "Position"
-            if cell_value and "Position" in str(cell_value):
-                # Extract data from the same row
-                ordnungszahl = sheet[f'B{row}'].value
-                kurztext = sheet[f'C{row}'].value
-                langtext = sheet[f'D{row}'].value
-                menge = sheet[f'E{row}'].value
-                einheit = sheet[f'F{row}'].value
-                
-                # Create position dictionary
-                position = {
-                    "ordnungszahl": str(ordnungszahl) if ordnungszahl else "",
-                    "kurztext": str(kurztext) if kurztext else "",
-                    "langtext": str(langtext) if langtext else "",
-                    "menge": menge,
-                    "einheit": str(einheit) if einheit else "Psch"
-                }
-                
-                positions.append(position)
-                print(f"✓ Found Position at row {row}: {position['kurztext']}")
-        
+
+        # Find header row for German LV format
+        header_row = None
+        for row in range(1, min(20, sheet.max_row + 1)):
+            cell_b = str(sheet[f'B{row}'].value or "").strip().lower()
+            cell_c = str(sheet[f'C{row}'].value or "").strip().lower()
+            cell_d = str(sheet[f'D{row}'].value or "").strip().lower()
+
+            if "ordnungszahl" in cell_b and "kurztext" in cell_c and "langtext" in cell_d:
+                header_row = row
+                print(f"[OK] Found header row at row {row}")
+                break
+
+        # Extract using German LV format
+        if header_row:
+            for row in range(header_row + 1, sheet.max_row + 1):
+                typ = str(sheet[f'A{row}'].value or "").strip().lower()
+
+                # Only extract rows marked as "Position"
+                if typ == "position":
+                    ordnungszahl = sheet[f'B{row}'].value
+                    kurztext = sheet[f'C{row}'].value
+                    langtext = sheet[f'D{row}'].value
+                    menge = sheet[f'E{row}'].value
+                    einheit = sheet[f'F{row}'].value
+
+                    # Skip if no description
+                    if not kurztext and not langtext:
+                        continue
+
+                    position = {
+                        "ordnungszahl": str(ordnungszahl) if ordnungszahl else "",
+                        "kurztext": str(kurztext) if kurztext else "",
+                        "langtext": str(langtext) if langtext else "",
+                        "menge": menge if menge else 1.0,
+                        "einheit": str(einheit) if einheit else "Psch"
+                    }
+
+                    positions.append(position)
+                    print(f"[OK] Row {row}: {position['kurztext'][:50]}")
+
+        # Fallback: old format with "Position" in column A
+        else:
+            for row in range(1, sheet.max_row + 1):
+                cell_value = sheet[f'A{row}'].value
+
+                if cell_value:
+                    cell_str = str(cell_value).strip().lower()
+                    if "position" in cell_str or cell_str.startswith("pos"):
+                        ordnungszahl = sheet[f'B{row}'].value
+                        kurztext = sheet[f'C{row}'].value
+                        langtext = sheet[f'D{row}'].value
+                        menge = sheet[f'E{row}'].value
+                        einheit = sheet[f'F{row}'].value
+
+                        position = {
+                            "ordnungszahl": str(ordnungszahl) if ordnungszahl else "",
+                            "kurztext": str(kurztext) if kurztext else "",
+                            "langtext": str(langtext) if langtext else "",
+                            "menge": menge if menge else 1.0,
+                            "einheit": str(einheit) if einheit else "Psch"
+                        }
+
+                        positions.append(position)
+                        print(f"[OK] Row {row}: {position['kurztext'][:50]}")
+
         workbook.close()
         print(f"\n📊 Total positions extracted: {len(positions)}")
         return positions
-    
+
     except Exception as e:
-        print(f"❌ Error extracting from Excel: {e}")
+        print(f"[ERROR] Error extracting from Excel: {e}")
+        import traceback
+        print(traceback.format_exc())
         return []
 
 def estimate_prices_with_ai(positions):
@@ -555,12 +612,38 @@ def read_excel_as_text(file_path):
         # Read all sheets with context manager to ensure proper cleanup
         with pd.ExcelFile(file_path) as excel_file:
             text_content = ""
-            
+
             for sheet_name in excel_file.sheet_names:
                 df = pd.read_excel(excel_file, sheet_name=sheet_name)
                 text_content += f"\n\n=== SHEET: {sheet_name} ===\n\n"
                 text_content += df.to_string(index=False)
-        
+
+        return text_content
+    except Exception as e:
+        print(f"Error reading Excel file: {e}")
+        return None
+
+def read_excel_as_text_chunked(file_path, max_rows=500):
+    """
+    Read Excel file with row limit to prevent token overflow.
+    Only reads up to max_rows per sheet.
+    """
+    try:
+        with pd.ExcelFile(file_path) as excel_file:
+            text_content = ""
+
+            for sheet_name in excel_file.sheet_names:
+                # Read with row limit
+                df = pd.read_excel(excel_file, sheet_name=sheet_name, nrows=max_rows)
+
+                text_content += f"\n\n=== SHEET: {sheet_name} ===\n\n"
+                text_content += df.to_string(index=False)
+
+                # Add note if we truncated
+                total_rows = pd.read_excel(excel_file, sheet_name=sheet_name, usecols=[0]).shape[0]
+                if total_rows > max_rows:
+                    text_content += f"\n\n[NOTE: Showing first {max_rows} of {total_rows} rows to prevent token limit]"
+
         return text_content
     except Exception as e:
         print(f"Error reading Excel file: {e}")
@@ -586,18 +669,18 @@ def extract_with_ai(file_path, file_extension):
             # First check if Excel has the expected structure
             print(f"🔍 Checking Excel structure...")
             has_structure = check_excel_structure(file_path)
-            
+
             if has_structure:
                 print(f"✓ Excel has expected structure - using direct extraction")
                 print(f"📊 Extracting positions from Excel...")
-                
+
                 # Extract positions
                 positions = extract_positions_from_structured_excel(file_path)
-                
+
                 if positions:
                     # Estimate prices with AI
                     positions = estimate_prices_with_ai(positions)
-                    
+
                     # Convert to DataFrame
                     data = []
                     for pos in positions:
@@ -605,7 +688,7 @@ def extract_with_ai(file_path, file_extension):
                             qty = float(pos.get('menge', 1.0)) if pos.get('menge') else 1.0
                         except:
                             qty = 1.0
-                        
+
                         data.append({
                             'pos': pos.get('ordnungszahl', ''),
                             'description': pos.get('langtext', pos.get('kurztext', '')),
@@ -613,7 +696,7 @@ def extract_with_ai(file_path, file_extension):
                             'unit': pos.get('einheit', 'Psch'),
                             'unit_price': pos.get('unit_price', 0.0)
                         })
-                    
+
                     df = pd.DataFrame(data)
                     total_time = time.time() - total_start_time
                     print(f"\n✅ Extraction complete in {total_time:.2f}s")
@@ -623,21 +706,32 @@ def extract_with_ai(file_path, file_extension):
                     print(f"⚠️ No positions found - falling back to AI extraction")
             else:
                 print(f"⚠️ Excel structure doesn't match - using AI extraction")
-            
-            # Fallback to original AI extraction method
-            print(f"📊 Processing Excel file with AI...")
+
+            # Fallback: Convert Excel to text (chunked to avoid token limits)
+            # Gemini doesn't support Excel MIME type directly
+            print(f"📊 Processing Excel file with AI (text conversion)...")
             read_start = time.time()
-            excel_text = read_excel_as_text(file_path)
+
+            # Read Excel with size limit to prevent token overflow
+            excel_text = read_excel_as_text_chunked(file_path, max_rows=500)
             read_time = time.time() - read_start
             print(f"✅ Excel file read successfully ({read_time:.2f}s)")
-            
+
             if excel_text is None:
                 raise Exception("Failed to read Excel file")
-            
+
+            # Check text size and warn if too large
+            text_length = len(excel_text)
+            estimated_tokens = text_length // 4  # Rough estimate: 1 token ≈ 4 characters
+            print(f"   Text size: {text_length:,} characters (~{estimated_tokens:,} tokens)")
+
+            if estimated_tokens > 900000:  # Leave margin below 1M token limit
+                print(f"⚠️ File is very large, using only first 500 rows to avoid token limit")
+
             # Send text content to AI
             print(f"\n🧠 AI analyzing document...")
             print(f"   Starting with: gemini-2.5-flash-lite (will auto-switch if needed)")
-            
+
             analysis_start = time.time()
             prompt_with_data = f"{MASTER_EXTRACTION_PROMPT}\n\nDOKUMENT INHALT:\n{excel_text}"
             response, model_used = call_ai_with_retry(
