@@ -16,7 +16,9 @@
       "Bash(\"C:\\\\Users\\\\senhabym\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe\" test_excel.py)",
       "Bash(git add:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nFix Excel extraction: Add support for German LV format and prevent token limit errors\n\nMajor improvements to handle large German Leistungsverzeichnis files:\n\n- Add detection for German LV format \\(Typ | Ordnungszahl | Kurztext | Langtext\\)\n- Support two Excel formats: old format \\(Position in col A\\) and German LV format\n- Implement chunked reading to prevent Google Gemini token limit \\(1M tokens\\)\n- Replace Excel file upload with text conversion to avoid MIME type errors\n- Add read_excel_as_text_chunked\\(\\) function with 500-row limit per sheet\n- Improve structure detection with case-insensitive matching\n- Fix Unicode encoding issues in print statements for Windows console\n- Add detailed extraction logging for better debugging\n\nThis fixes the \"400 INVALID_ARGUMENT: input token count exceeds maximum\" error\nand enables proper extraction from German construction tender documents.\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(.venvScriptspython.exe:*)",
+      "Bash(\".venv\\\\Scripts\\\\python.exe\":*)"
     ]
   }
 }

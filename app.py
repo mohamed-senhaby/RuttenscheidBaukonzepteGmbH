@@ -884,7 +884,7 @@ def extract_with_ai(file_path, file_extension, progress_bar=None, status_text=No
 
                         data.append({
                             'pos': pos.get('ordnungszahl', ''),
-                            'description': pos.get('langtext', pos.get('kurztext', '')),
+                            'description': pos.get('langtext') or pos.get('kurztext', ''),
                             'quantity': qty,
                             'unit': pos.get('einheit', 'Psch'),
                             'unit_price': pos.get('unit_price', 0.0)
@@ -1448,7 +1448,11 @@ st.markdown("---")
 st.subheader("✏️ Schritt 2: Positionen bearbeiten")
 
 if not st.session_state.calculation_df.empty:
-    
+
+    # Display position count
+    num_positions = len(st.session_state.calculation_df)
+    st.info(f"📋 **{num_positions} Positionen** extrahiert")
+
     # Calculate total price for display (GP = Menge × EP)
     display_df = st.session_state.calculation_df.copy()
     # GP netto = quantity × unit_price (EP already includes any factor applied)
