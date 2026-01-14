@@ -31,8 +31,7 @@ def format_german_number(value, decimals=2):
         # Now swap to German format:
         # Step 1: Replace comma (thousand separator) with dot
         formatted = formatted.replace(',', '.')
-        # Step 2: Replace the last dot before decimals with comma
-        # Find the position of decimal point (it's a dot in English format)
+ 
         parts = formatted.rsplit('.', 1)  # Split from right, only once
         if len(parts) == 2:
             # parts[0] = "1.234.567", parts[1] = "89"
@@ -198,15 +197,15 @@ def call_ai_with_retry(model, contents, max_retries=3, initial_delay=5):
     Tries alternative models when encountering 503 (overloaded) or 429 (quota exceeded) errors.
     Returns tuple: (response, model_used)
     """
-    # Define available models in priority order
+    # Define available models in priority order (strongest first, then faster fallbacks)
     available_models = [
-        'gemini-3-flash-preview',
-        'gemini-3-pro-preview',
-        'gemini-2.5-flash',
-        'gemini-2.5-flash-lite',
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-lite',
-        'gemini-2.5-pro'
+        'gemini-2.5-flash',       # Best balance: fast + capable
+        'gemini-2.5-flash-lite',  # Fast and capable
+        'gemini-2.5-pro',         # Most capable 2.5
+        'gemini-2.0-flash',       # Reliable fallback
+        'gemini-2.0-flash-lite',  # Fast fallback
+        'gemini-3-pro',           # Newest pro (if available)
+        'gemini-3-flash',         # Newest flash (if available)
     ]
     
     # Start with the requested model, then try others if needed
@@ -475,113 +474,284 @@ def extract_positions_from_structured_excel(file_path):
         print(traceback.format_exc())
         return []
 
-def estimate_prices_with_ai(positions):
+def estimate_prices_with_ai(positions, progress_callback=None):
     """
     Use AI to estimate prices for positions based on Langtext descriptions.
+    Processes in batches to avoid token limits and JSON truncation.
+
+    Args:
+        positions: List of position dictionaries
+        progress_callback: Optional function(percent, message) to report progress
     """
-    try:
-        print(f"\n💰 Estimating prices with AI for {len(positions)} positions...")
-        
-        # Create prompt for AI
+    # Helper function to normalize position numbers for comparison
+    def normalize_pos(pos_str):
+        """Normalize position number: remove trailing dots, leading zeros in segments"""
+        if not pos_str:
+            return ""
+        pos_str = pos_str.rstrip('.')
+        segments = pos_str.split('.')
+        normalized = []
+        for seg in segments:
+            normalized.append(seg.lstrip('0') or '0')
+        return '.'.join(normalized)
+
+    def get_ai_prices_for_batch(batch_positions):
+        """Get prices for a batch of positions from AI"""
         positions_text = "\n\n".join([
-            f"Position {i+1}:\n"
+            f"Position:\n"
             f"Nummer: {pos['ordnungszahl']}\n"
-            f"Beschreibung: {pos['langtext'] or pos['kurztext']}\n"
+            f"Beschreibung: {(pos['langtext'] or pos['kurztext'])[:500]}\n"
             f"Menge: {pos['menge']} {pos['einheit']}"
-            for i, pos in enumerate(positions)
+            for pos in batch_positions
         ])
-        
-        prompt = f"""
-Du bist ein erfahrener Baukalkulator mit 25 Jahren Erfahrung. Analysiere JEDE Position GENAU und berechne realistische Preise.
 
-⚠️ KRITISCHE ANWEISUNG - BESCHREIBUNG SORGFÄLTIG LESEN:
-1. Lies die VOLLSTÄNDIGE Beschreibung jeder Position SORGFÄLTIG durch
-2. Identifiziere ALLE relevanten Details:
-   - Mengenangaben im Text (z.B. "600 Meter", "31.200 MeterWochen", "5 Tonnen")
-   - Zeiträume (z.B. "1 Jahr", "12 Monate", "52 Wochen")
-   - Abrechnungsgrundlagen (z.B. "Meter x Wochen", "Stunden x Tage")
-   - Zusätzliche Leistungen (Material, Wartung, Personal, Transport)
-3. BERECHNE den Preis basierend auf diesen Details
-4. Bei Pauschalpreisen (psch): Multipliziere die im Text genannten Mengen!
+        prompt = f"""Du bist ein erfahrener Baukalkulator. Gib für JEDE Position den EINHEITSPREIS (EP) in EUR.
 
-BEISPIEL-KALKULATION:
-Beschreibung: "Bauzaun vorhalten für 600 Meter über 1 Jahr, Abrechnungsbasis: 31.200 MeterWochen"
-- Bauzaunmiete: ~8 EUR/Meter/Woche
-- Berechnung: 31.200 MeterWochen × 8 EUR = 249.600 EUR
-- + Aufstellung/Abbau: 600m × 15 EUR = 9.000 EUR
-- + Wartung (10%): 25.860 EUR
-- Gesamt: ~284.000 EUR (NICHT 1.500 EUR!)
+⚠️ KRITISCH - EINHEITSPREIS (EP):
+- Gib NUR den EINHEITSPREIS pro Einheit zurück!
+- Bei "140 St" → Preis für 1 Stück (z.B. 150 EUR/St)
+- Bei "1 psch" → Pauschalpreis für die gesamte Leistung
+- Bei "psch" mit Mengenangaben im Text (z.B. "31.200 MeterWochen") → Multipliziere!
 
-KALKULATIONSGRUNDLAGEN:
-- Material: Einkaufspreis + 3-5% Verschnitt + 10-15% Aufschlag
-- Lohn: Facharbeiter 45-55 EUR/Std, Hilfskraft 35-45 EUR/Std
-- Geräte: Tagesmiete + Betriebskosten + Vorhaltekosten
-- Transport: Entfernung + Gewicht + Ladezeit
-- BGK (Baustellengemeinkosten): 8-12% auf Lohn+Geräte
-- AGK (Allgemeine Geschäftskosten): 5-8% auf Herstellkosten
-- W&G (Wagnis & Gewinn): 3-5% auf Gesamtkosten
+TYPISCHE EINHEITSPREISE:
+- Verkehrszeichen (St): 100-200 EUR/St
+- Baustelleneinrichtung (psch): 5.000-15.000 EUR
+- Erdaushub (m³): 12-18 EUR/m³
+- Asphalt (m²): 25-45 EUR/m²
+- Beton C25/30 (m³): 180-260 EUR/m³
+- Bauzaun mit MeterWochen (psch): Berechne aus Mengenangabe!
 
-TYPISCHE PREISREFERENZEN:
-- Baustelleneinrichtung: 2.500-8.000 EUR (abhängig von Größe)
-- Bauzaunmiete: 5-10 EUR/Meter/Woche
-- Erdaushub mit Bagger: 10-18 EUR/m³
-- Beton C25/30 liefern+einbauen: 180-260 EUR/m³
-- Mauerwerk errichten: 85-130 EUR/m²
-- Bewehrung liefern+verlegen: 1.200-1.800 EUR/t
-- Gerüstmiete: 6-12 EUR/m²/Monat
-- LKW-Transport: 2-4 EUR/km
-- Bauarbeiter-Tag: 400-550 EUR
-
-⚠️ WICHTIG - REALISTISCHE PREISE:
-- Lies JEDE Beschreibung komplett durch, bevor du einen Preis gibst
-- Beachte ALLE Mengenangaben im Text (z.B. "31.200 MeterWochen")
-- Berechne Pauschalpreise durch Multiplikation der Einzelpreise
-- Alle Preise müssen Cent-Beträge haben (45.50, 125.75, niemals 100.00)
-- Bei großen Leistungen (z.B. mehrmonatige Vorhaltung): Preise können 50.000-500.000 EUR sein!
-
-Positionen zur Kalkulation:
+Positionen:
 {positions_text}
 
-Ausgabe NUR als JSON-Array (keine Erklärungen):
-[
-  {{"pos": "Nummer", "unit_price": Preis}},
-  ...
-]
+Ausgabe NUR als JSON-Array:
+[{{"pos": "Nummer", "unit_price": Preis}}, ...]
 """
-        
-        # Call AI with more powerful model for better price analysis
         response, model_used = call_ai_with_retry(
-            model='gemini-3-pro-preview',  # Most powerful model for best accuracy
+            model='gemini-2.0-flash-lite',
             contents=[prompt]
         )
-        
-        if model_used != 'gemini-3-pro-preview':
-            print(f"   Using alternative model: {model_used}")
-        
-        # Parse JSON response
+
         text = response.text.strip()
-        
-        # Extract JSON
         if text.startswith('```'):
             text = text.split('```')[1]
             if text.startswith('json'):
                 text = text[4:]
             text = text.strip()
-        
-        prices_data = json.loads(text)
-        
-        # Create price lookup dictionary
-        price_lookup = {item['pos']: float(item['unit_price']) for item in prices_data}
-        
-        # Add prices to positions
-        for pos in positions:
+
+        return json.loads(text)
+
+    def apply_prices_from_data(prices_data, target_positions):
+        """Apply prices from AI response to positions"""
+        price_lookup = {}
+        for item in prices_data:
+            pos_key = None
+            for key in ['pos', 'nummer', 'position', 'ordnungszahl', 'nr']:
+                if key in item:
+                    pos_key = str(item[key])
+                    break
+
+            if pos_key:
+                for key in ['unit_price', 'unitprice', 'preis', 'ep', 'einheitspreis', 'price']:
+                    if key in item:
+                        try:
+                            price_lookup[pos_key] = float(item[key])
+                        except:
+                            pass
+                        break
+            else:
+                for k, v in item.items():
+                    try:
+                        price_lookup[str(k)] = float(v)
+                    except:
+                        pass
+
+        # Create normalized lookup
+        normalized_lookup = {}
+        for key, value in price_lookup.items():
+            norm_key = normalize_pos(key)
+            normalized_lookup[norm_key] = value
+            if key not in normalized_lookup:
+                normalized_lookup[key] = value
+
+        matched = 0
+        for pos in target_positions:
             pos_num = pos['ordnungszahl']
-            pos['unit_price'] = price_lookup.get(pos_num, 0.0)
-            
-            # Ensure price is not zero
-            if pos['unit_price'] == 0.0:
-                # Fallback: estimate based on unit
-                unit = pos['einheit'].lower()
+            norm_pos_num = normalize_pos(pos_num)
+
+            if pos_num in price_lookup and price_lookup[pos_num] > 0:
+                pos['unit_price'] = price_lookup[pos_num]
+                matched += 1
+            elif norm_pos_num in normalized_lookup and normalized_lookup[norm_pos_num] > 0:
+                pos['unit_price'] = normalized_lookup[norm_pos_num]
+                matched += 1
+
+        return matched
+
+    try:
+        print(f"\n💰 Estimating prices with AI for {len(positions)} positions...")
+
+        # Process in batches of 50 to avoid token limits
+        BATCH_SIZE = 50
+        total_matched = 0
+        failed_batches = []
+
+        # Progress goes from 30% to 85% during batch processing
+        START_PROGRESS = 30
+        END_PROGRESS = 85
+
+        total_batches = (len(positions) + BATCH_SIZE - 1) // BATCH_SIZE
+
+        for batch_start in range(0, len(positions), BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, len(positions))
+            batch = positions[batch_start:batch_end]
+            batch_num = (batch_start // BATCH_SIZE) + 1
+
+            # Calculate progress percentage for this batch
+            progress_pct = START_PROGRESS + int((batch_num / total_batches) * (END_PROGRESS - START_PROGRESS))
+            progress_msg = f"Schätze Preise... Batch {batch_num}/{total_batches}"
+
+            if progress_callback:
+                progress_callback(progress_pct, progress_msg)
+
+            print(f"   📦 Processing batch {batch_num}/{total_batches} ({len(batch)} positions)...")
+
+            try:
+                prices_data = get_ai_prices_for_batch(batch)
+                matched = apply_prices_from_data(prices_data, batch)
+                total_matched += matched
+                print(f"   ✓ Batch {batch_num}: {matched}/{len(batch)} prices matched")
+            except Exception as batch_error:
+                print(f"   ⚠️ Batch {batch_num} failed: {batch_error}")
+                failed_batches.append((batch_num, batch))
+
+            # Small delay between batches to avoid rate limits
+            if batch_num < total_batches:
+                time.sleep(2)
+
+        # Retry failed batches after a longer delay
+        if failed_batches:
+            if progress_callback:
+                progress_callback(86, f"Wiederhole {len(failed_batches)} fehlgeschlagene Batches...")
+            print(f"   🔄 Retrying {len(failed_batches)} failed batches after delay...")
+            time.sleep(10)
+            for batch_num, batch in failed_batches:
+                print(f"   📦 Retrying batch {batch_num}...")
+                try:
+                    prices_data = get_ai_prices_for_batch(batch)
+                    matched = apply_prices_from_data(prices_data, batch)
+                    total_matched += matched
+                    print(f"   ✓ Batch {batch_num} retry: {matched}/{len(batch)} prices matched")
+                except Exception as retry_error:
+                    print(f"   ⚠️ Batch {batch_num} retry failed: {retry_error}")
+                time.sleep(3)
+
+        print(f"   📊 Total matched: {total_matched}/{len(positions)}")
+
+        # Collect positions without prices for a second AI call
+        missing_positions = []
+        for pos in positions:
+            current_price = pos.get('unit_price', 0)
+            if current_price is None or current_price == 0:
+                missing_positions.append(pos)
+
+        # If there are missing positions, make a second AI call specifically for them
+        if missing_positions:
+            print(f"   {len(missing_positions)} positions without prices, making second AI call...")
+
+            # Create focused prompt for missing positions only
+            missing_text = "\n".join([
+                f"Pos {p['ordnungszahl']}: {p.get('beschreibung', 'Keine Beschreibung')[:200]} | Einheit: {p.get('einheit', 'Psch')} | Menge: {p.get('menge', 1)}"
+                for p in missing_positions
+            ])
+
+            fallback_prompt = f"""Du bist ein erfahrener deutscher Baukalkulant.
+Gib realistische Einheitspreise (EP) in EUR für diese Baupositionen.
+
+WICHTIG:
+- Analysiere jede Beschreibung genau
+- Gib realistische deutsche Baumarktpreise
+- Alle Preise mit Cent-Beträgen (z.B. 125.50, nicht 125.00)
+
+Positionen:
+{missing_text}
+
+Ausgabe NUR als JSON-Array:
+[
+  {{"pos": "Nummer", "unit_price": Preis}},
+  ...
+]
+"""
+            try:
+                fallback_response, _ = call_ai_with_retry(
+                    model='gemini-2.0-flash',  # Use slightly better model for retry
+                    contents=[fallback_prompt]
+                )
+
+                fallback_text = fallback_response.text.strip()
+                if fallback_text.startswith('```'):
+                    fallback_text = fallback_text.split('```')[1]
+                    if fallback_text.startswith('json'):
+                        fallback_text = fallback_text[4:]
+                    fallback_text = fallback_text.strip()
+
+                fallback_prices = json.loads(fallback_text)
+                print(f"   Second AI call returned {len(fallback_prices)} prices")
+
+                # Build lookup from fallback response
+                fallback_lookup = {}
+                for item in fallback_prices:
+                    pos_key = None
+                    for key in ['pos', 'nummer', 'position', 'ordnungszahl', 'nr']:
+                        if key in item:
+                            pos_key = str(item[key])
+                            break
+
+                    if pos_key:
+                        for key in ['unit_price', 'unitprice', 'preis', 'ep', 'einheitspreis', 'price']:
+                            if key in item:
+                                try:
+                                    fallback_lookup[pos_key] = float(item[key])
+                                except:
+                                    pass
+                                break
+                    else:
+                        for k, v in item.items():
+                            try:
+                                fallback_lookup[str(k)] = float(v)
+                            except:
+                                pass
+
+                # Create normalized fallback lookup
+                normalized_fallback = {}
+                for key, value in fallback_lookup.items():
+                    norm_key = normalize_pos(key)
+                    normalized_fallback[norm_key] = value
+                    if key not in normalized_fallback:
+                        normalized_fallback[key] = value
+
+                # Apply fallback prices from second AI call
+                for pos in missing_positions:
+                    pos_num = pos['ordnungszahl']
+                    norm_pos_num = normalize_pos(pos_num)
+
+                    if pos_num in fallback_lookup and fallback_lookup[pos_num] > 0:
+                        pos['unit_price'] = fallback_lookup[pos_num]
+                        print(f"   AI fallback matched {pos_num}: {pos['unit_price']}")
+                    elif norm_pos_num in normalized_fallback and normalized_fallback[norm_pos_num] > 0:
+                        pos['unit_price'] = normalized_fallback[norm_pos_num]
+                        print(f"   AI fallback matched {pos_num} (normalized): {pos['unit_price']}")
+
+            except Exception as fallback_error:
+                print(f"   Second AI call failed: {fallback_error}")
+
+        # Final fallback: use unit-based defaults for any still missing
+        final_missing = 0
+        for pos in positions:
+            current_price = pos.get('unit_price', 0)
+            if current_price is None or current_price == 0:
+                final_missing += 1
+                unit = pos.get('einheit', 'Psch').lower()
                 if 'psch' in unit or 'pau' in unit:
                     pos['unit_price'] = 1500.50
                 elif 'm³' in unit or 'm3' in unit:
@@ -592,7 +762,11 @@ Ausgabe NUR als JSON-Array (keine Erklärungen):
                     pos['unit_price'] = 35.25
                 else:
                     pos['unit_price'] = 85.50
-        
+                print(f"   Final fallback for {pos['ordnungszahl']}: {pos['unit_price']}")
+
+        if final_missing > 0:
+            print(f"   ⚠️ {final_missing} positions still needed unit-based fallback")
+
         print(f"✓ Price estimation complete")
         return positions
     
@@ -649,28 +823,46 @@ def read_excel_as_text_chunked(file_path, max_rows=500):
         print(f"Error reading Excel file: {e}")
         return None
 
-def extract_with_ai(file_path, file_extension):
+def extract_with_ai(file_path, file_extension, progress_bar=None, status_text=None):
     """
     Master extraction function - sends file directly to AI for complete analysis.
+
+    Args:
+        file_path: Path to the file to process
+        file_extension: File extension (e.g., '.pdf', '.xlsx')
+        progress_bar: Optional Streamlit progress bar to update
+        status_text: Optional Streamlit text element to update status
     """
+    def update_progress(percent, message):
+        """Helper to update progress bar and status text"""
+        if progress_bar is not None:
+            progress_bar.progress(percent / 100, text=f"{percent}% - {message}")
+        if status_text is not None:
+            status_text.text(message)
+        print(f"[{percent}%] {message}")
+
     # Start total timer
     total_start_time = time.time()
-    
+
     try:
+        update_progress(5, "Starte Analyse...")
+
         print(f"\n{'='*70}")
         print(f"🤖 AI-POWERED EXTRACTION")
         print(f"📄 File: {os.path.basename(file_path)}")
         print(f"📝 Extension: {file_extension}")
         print(f"{'='*70}\n")
-        
+
         # Check if file is Excel - handle differently
         ext = file_extension.lower()
         if ext in ['.xlsx', '.xls']:
             # First check if Excel has the expected structure
+            update_progress(10, "Prüfe Excel-Struktur...")
             print(f"🔍 Checking Excel structure...")
             has_structure = check_excel_structure(file_path)
 
             if has_structure:
+                update_progress(15, "Excel-Struktur erkannt - Extrahiere Positionen...")
                 print(f"✓ Excel has expected structure - using direct extraction")
                 print(f"📊 Extracting positions from Excel...")
 
@@ -678,8 +870,9 @@ def extract_with_ai(file_path, file_extension):
                 positions = extract_positions_from_structured_excel(file_path)
 
                 if positions:
-                    # Estimate prices with AI
-                    positions = estimate_prices_with_ai(positions)
+                    # Estimate prices with AI (pass progress callback)
+                    update_progress(30, "Schätze Preise mit KI...")
+                    positions = estimate_prices_with_ai(positions, progress_callback=update_progress)
 
                     # Convert to DataFrame
                     data = []
@@ -697,8 +890,10 @@ def extract_with_ai(file_path, file_extension):
                             'unit_price': pos.get('unit_price', 0.0)
                         })
 
+                    update_progress(90, "Erstelle Ergebnis-Tabelle...")
                     df = pd.DataFrame(data)
                     total_time = time.time() - total_start_time
+                    update_progress(100, f"Fertig! {len(df)} Positionen extrahiert")
                     print(f"\n✅ Extraction complete in {total_time:.2f}s")
                     print(f"📊 Extracted {len(df)} positions")
                     return df
@@ -709,12 +904,14 @@ def extract_with_ai(file_path, file_extension):
 
             # Fallback: Convert Excel to text (chunked to avoid token limits)
             # Gemini doesn't support Excel MIME type directly
+            update_progress(20, "Konvertiere Excel zu Text...")
             print(f"📊 Processing Excel file with AI (text conversion)...")
             read_start = time.time()
 
             # Read Excel with size limit to prevent token overflow
             excel_text = read_excel_as_text_chunked(file_path, max_rows=500)
             read_time = time.time() - read_start
+            update_progress(30, "Excel-Datei gelesen")
             print(f"✅ Excel file read successfully ({read_time:.2f}s)")
 
             if excel_text is None:
@@ -729,6 +926,7 @@ def extract_with_ai(file_path, file_extension):
                 print(f"⚠️ File is very large, using only first 500 rows to avoid token limit")
 
             # Send text content to AI
+            update_progress(40, "KI analysiert Dokument...")
             print(f"\n🧠 AI analyzing document...")
             print(f"   Starting with: gemini-2.5-flash-lite (will auto-switch if needed)")
 
@@ -740,6 +938,7 @@ def extract_with_ai(file_path, file_extension):
             )
         else:
             # For other file types, upload to Gemini
+            update_progress(15, "Lade Datei zur KI hoch...")
             print(f"📤 Uploading file to AI...")
             upload_start = time.time()
             
@@ -759,29 +958,33 @@ def extract_with_ai(file_path, file_extension):
                 file_ref = genai.upload_file(path=file_path)
             
             upload_time = time.time() - upload_start
+            update_progress(30, "Datei hochgeladen")
             print(f"✅ File uploaded successfully ({upload_time:.2f}s)")
             print(f"   File URI: {file_ref.uri}")
             print(f"   File Name: {file_ref.name}")
-            
+
             # Send to AI with master prompt
+            update_progress(40, "KI analysiert Dokument...")
             print(f"\n🧠 AI analyzing document...")
             print(f"   Starting with: gemini-2.5-flash-lite (will auto-switch if needed)")
-            
+
             analysis_start = time.time()
             response, model_used = call_ai_with_retry(
                 model='gemini-2.5-flash-lite',
                 contents=[file_ref, MASTER_EXTRACTION_PROMPT]
             )
         analysis_time = time.time() - analysis_start
-        
+        update_progress(70, "KI-Antwort erhalten")
+
         if model_used != 'gemini-2.5-flash-lite':
             print(f"   ✓ Used model: {model_used}")
-        
+
         text = response.text
         print(f"\n📥 AI Response received ({analysis_time:.2f}s)")
         print(f"   Length: {len(text)} characters")
-        
+
         # Parse JSON response
+        update_progress(80, "Verarbeite KI-Antwort...")
         parse_start = time.time()
         df = parse_json_response(text)
         parse_time = time.time() - parse_start
@@ -789,19 +992,21 @@ def extract_with_ai(file_path, file_extension):
         
         if not df.empty:
             print(f"\n✅ Extraction successful: {len(df)} positions found")
-            
+
             # Check for zero prices
             zero_prices = (df['unit_price'] == 0).sum()
             if zero_prices > 0:
+                update_progress(85, f"Korrigiere {zero_prices} Preise mit KI...")
                 print(f"⚠️  Warning: {zero_prices} positions with zero price")
                 print(f"🔧 Requesting AI to fix prices...")
                 price_fix_start = time.time()
                 df = fix_prices_with_ai(df)
                 price_fix_time = time.time() - price_fix_start
                 print(f"   Price fixing time: {price_fix_time:.2f}s")
-            
+
             # Calculate total time
             total_time = time.time() - total_start_time
+            update_progress(100, f"Fertig! {len(df)} Positionen extrahiert")
             print(f"\n{'='*70}")
             print(f"⏱️  TOTAL PROCESSING TIME: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
             print(f"{'='*70}\n")
@@ -1163,69 +1368,78 @@ if uploaded_file:
     st.markdown("</div>", unsafe_allow_html=True)
     
     if st.button("🚀 Jetzt analysieren", type="primary", use_container_width=True, help="Dokument mit KI analysieren und Positionen extrahieren"):
-        with st.spinner("🤖 KI analysiert das Dokument... Bitte warten..."):
-            
-            # Save uploaded file temporarily
-            suffix = f".{uploaded_file.name.split('.')[-1]}"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(uploaded_file.getvalue())
-                temp_path = tmp.name
-            
-            try:
-                # Extract with AI
-                df_result = extract_with_ai(temp_path, suffix.lower())
-                
-                # Cleanup temp file
-                safe_remove_file(temp_path)
-                
-                if not df_result.empty:
-                    # Clean and validate data
-                    df_result = df_result[df_result['description'].notna()]
-                    df_result = df_result[df_result['description'].str.len() > 3]
-                    df_result['quantity'] = pd.to_numeric(df_result['quantity'], errors='coerce').fillna(1.0)
-                    df_result['unit_price'] = pd.to_numeric(df_result['unit_price'], errors='coerce').fillna(0.0)
-                    # Store original prices
-                    df_result['original_price'] = df_result['unit_price'].copy()
-                    # Initialize price factor
-                    df_result['price_factor'] = 1.0
-                    df_result = df_result.reset_index(drop=True)
-                    
-                    st.session_state.calculation_df = df_result
-                    st.session_state.price_factor = 1.0
-                    st.success(f"✅ **Erfolgreich!** {len(df_result)} Positionen extrahiert")
-                    
-                    # Statistics with enhanced display
-                    st.markdown("#### 📊 Extraktionsergebnis")
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("📋 Positionen", f"{len(df_result)}", help="Anzahl der gefundenen Positionen")
-                    with col2:
-                        priced = (df_result['unit_price'] > 0).sum()
-                        st.metric("💰 Mit Preis", f"{priced}", help="Positionen mit Preisangabe")
-                    with col3:
-                        total = (df_result['quantity'] * df_result['unit_price']).sum()
-                        st.metric("💵 Summe Netto", f"{format_german_number(total, 0)} €", help="Gesamtsumme ohne MwSt.")
-                    with col4:
-                        total_brutto = total * 1.19
-                        st.metric("✅ Summe Brutto", f"{format_german_number(total_brutto, 0)} €", help="Gesamtsumme inkl. 19% MwSt.")
+        # Create progress bar and status text
+        progress_bar = st.progress(0, text="0% - Starte...")
+        status_text = st.empty()
+
+        # Save uploaded file temporarily
+        suffix = f".{uploaded_file.name.split('.')[-1]}"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded_file.getvalue())
+            temp_path = tmp.name
+
+        try:
+            # Extract with AI (pass progress bar)
+            df_result = extract_with_ai(temp_path, suffix.lower(), progress_bar=progress_bar, status_text=status_text)
+
+            # Cleanup temp file
+            safe_remove_file(temp_path)
+
+            # Clear progress bar after completion
+            progress_bar.empty()
+            status_text.empty()
+
+            if not df_result.empty:
+                # Clean and validate data
+                df_result = df_result[df_result['description'].notna()]
+                df_result = df_result[df_result['description'].str.len() > 3]
+                df_result['quantity'] = pd.to_numeric(df_result['quantity'], errors='coerce').fillna(1.0)
+                df_result['unit_price'] = pd.to_numeric(df_result['unit_price'], errors='coerce').fillna(0.0)
+                # Store original prices
+                df_result['original_price'] = df_result['unit_price'].copy()
+                # Initialize price factor
+                df_result['price_factor'] = 1.0
+                df_result = df_result.reset_index(drop=True)
+
+                st.session_state.calculation_df = df_result
+                st.session_state.price_factor = 1.0
+                st.success(f"✅ **Erfolgreich!** {len(df_result)} Positionen extrahiert")
+
+                # Statistics with enhanced display
+                st.markdown("#### 📊 Extraktionsergebnis")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("📋 Positionen", f"{len(df_result)}", help="Anzahl der gefundenen Positionen")
+                with col2:
+                    priced = (df_result['unit_price'] > 0).sum()
+                    st.metric("💰 Mit Preis", f"{priced}", help="Positionen mit Preisangabe")
+                with col3:
+                    total = (df_result['quantity'] * df_result['unit_price']).sum()
+                    st.metric("💵 Summe Netto", f"{format_german_number(total, 0)} €", help="Gesamtsumme ohne MwSt.")
+                with col4:
+                    total_brutto = total * 1.19
+                    st.metric("✅ Summe Brutto", f"{format_german_number(total_brutto, 0)} €", help="Gesamtsumme inkl. 19% MwSt.")
+            else:
+                st.error("❌ Keine Positionen gefunden. Bitte prüfen Sie das Dokument.")
+
+        except Exception as e:
+            # Clear progress bar on error
+            progress_bar.empty()
+            status_text.empty()
+            st.error(f"❌ Fehler: {str(e)}")
+            if "503" in str(e) or "overloaded" in str(e).lower():
+                st.warning("⚠️ Alle verfügbaren KI-Modelle sind derzeit überlastet. Bitte versuchen Sie es in einigen Minuten erneut.")
+                st.info("💡 Das System hat automatisch folgende Modelle versucht: gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.0-flash, gemini-2.0-flash-lite, gemini-2.5-pro")
+            elif "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):
+                if "input_token" in str(e) or "token" in str(e).lower():
+                    st.warning("⚠️ Token-Limit für alle verfügbaren Modelle überschritten. Das System hat bereits mehrere Modelle versucht.")
+                    st.info("💡 Tipp: Bei sehr großen Dateien kann es zu Token-Limits kommen. Versuchen Sie kleinere Dateien oder warten Sie 1-2 Minuten.")
                 else:
-                    st.error("❌ Keine Positionen gefunden. Bitte prüfen Sie das Dokument.")
-                    
-            except Exception as e:
-                st.error(f"❌ Fehler: {str(e)}")
-                if "503" in str(e) or "overloaded" in str(e).lower():
-                    st.warning("⚠️ Alle verfügbaren KI-Modelle sind derzeit überlastet. Bitte versuchen Sie es in einigen Minuten erneut.")
-                    st.info("💡 Das System hat automatisch folgende Modelle versucht: gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.0-flash, gemini-2.0-flash-lite, gemini-2.5-pro")
-                elif "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):
-                    if "input_token" in str(e) or "token" in str(e).lower():
-                        st.warning("⚠️ Token-Limit für alle verfügbaren Modelle überschritten. Das System hat bereits mehrere Modelle versucht.")
-                        st.info("💡 Tipp: Bei sehr großen Dateien kann es zu Token-Limits kommen. Versuchen Sie kleinere Dateien oder warten Sie 1-2 Minuten.")
-                    else:
-                        st.warning("⚠️ API-Quota für alle verfügbaren Modelle überschritten.")
-                        st.info("💡 Das System hat automatisch 5 verschiedene Modelle versucht. Bitte warten Sie einige Minuten.")
-                elif "Unsupported MIME type" in str(e) or "INVALID_ARGUMENT" in str(e):
-                    st.warning("⚠️ Dieses Dateiformat wird möglicherweise nicht direkt unterstützt. Das System verarbeitet das Dokument lokal.")
-                safe_remove_file(temp_path)
+                    st.warning("⚠️ API-Quota für alle verfügbaren Modelle überschritten.")
+                    st.info("💡 Das System hat automatisch 5 verschiedene Modelle versucht. Bitte warten Sie einige Minuten.")
+            elif "Unsupported MIME type" in str(e) or "INVALID_ARGUMENT" in str(e):
+                st.warning("⚠️ Dieses Dateiformat wird möglicherweise nicht direkt unterstützt. Das System verarbeitet das Dokument lokal.")
+            safe_remove_file(temp_path)
 
 st.markdown("---")
 
