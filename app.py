@@ -1449,13 +1449,10 @@ st.subheader("✏️ Schritt 2: Positionen bearbeiten")
 
 if not st.session_state.calculation_df.empty:
     
-    # Calculate total price for display using price_factor
+    # Calculate total price for display (GP = Menge × EP)
     display_df = st.session_state.calculation_df.copy()
-    # Ensure price_factor column exists
-    if 'price_factor' not in display_df.columns:
-        display_df['price_factor'] = 1.0
-    # EP netto stays as original unit_price, GP netto includes factor
-    display_df['total_price'] = display_df['quantity'] * display_df['unit_price'] * display_df['price_factor']
+    # GP netto = quantity × unit_price (EP already includes any factor applied)
+    display_df['total_price'] = display_df['quantity'] * display_df['unit_price']
 
     # Create formatted display columns for German number format
     display_df['quantity_display'] = display_df['quantity'].apply(lambda x: format_german_number(x, 2))
@@ -1503,13 +1500,10 @@ if not st.session_state.calculation_df.empty:
     if 'unit_price_display' in edited_df.columns:
         edited_df['unit_price'] = edited_df['unit_price_display'].apply(parse_german_number)
     
-    # Ensure price_factor exists and recalculate total_price
-    if 'price_factor' not in edited_df.columns:
-        edited_df['price_factor'] = 1.0
+    # Recalculate total_price (GP = Menge × EP)
     edited_df['quantity'] = pd.to_numeric(edited_df['quantity'], errors='coerce').fillna(0)
     edited_df['unit_price'] = pd.to_numeric(edited_df['unit_price'], errors='coerce').fillna(0)
-    edited_df['price_factor'] = pd.to_numeric(edited_df['price_factor'], errors='coerce').fillna(1.0)
-    edited_df['total_price'] = edited_df['quantity'] * edited_df['unit_price'] * edited_df['price_factor']
+    edited_df['total_price'] = edited_df['quantity'] * edited_df['unit_price']
     
     # Check if data has changed (comparing key columns)
     old_df = st.session_state.calculation_df
@@ -1560,10 +1554,10 @@ if not st.session_state.calculation_df.empty:
     with col_mult3:
         st.markdown("<div style='margin-top: 28px;'>", unsafe_allow_html=True)
         if st.button("✅ Anwenden", use_container_width=True, type="primary"):
-            # Update price_factor instead of unit_price
-            st.session_state.calculation_df['price_factor'] = price_multiplier
+            # Update unit_price directly (EP changes, GP recalculates automatically)
+            st.session_state.calculation_df['unit_price'] = st.session_state.calculation_df['unit_price'] * price_multiplier
             st.session_state.price_factor = price_multiplier
-            st.success(f"✅ Preisfaktor {price_multiplier} angewendet! EP bleibt unverändert, GP wurde angepasst.")
+            st.success(f"✅ Faktor {price_multiplier} angewendet! EP wurde angepasst.")
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
     
@@ -1790,11 +1784,8 @@ if not st.session_state.calculation_df.empty:
 
         # Prepare export dataframe with German-formatted text
         export_df = edited_df[['pos', 'description', 'quantity', 'unit', 'unit_price']].copy()
-        # Calculate GP with price factor
-        if 'price_factor' in edited_df.columns:
-            export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price'] * edited_df['price_factor']
-        else:
-            export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price']
+        # Calculate GP (Menge × EP)
+        export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price']
 
         # Convert numeric columns to German-formatted text strings
         export_df['quantity'] = export_df['quantity'].apply(lambda x: format_german_number(x, 2))
@@ -1898,8 +1889,7 @@ if not st.session_state.calculation_df.empty:
             try:
                 # Prepare dataframe for PDF with calculated total prices
                 pdf_df = edited_df.copy()
-                if 'price_factor' in pdf_df.columns:
-                    pdf_df['total_price'] = pdf_df['quantity'] * pdf_df['unit_price'] * pdf_df['price_factor']
+                pdf_df['total_price'] = pdf_df['quantity'] * pdf_df['unit_price']
 
                 # Generate PDF
                 pdf_bytes = generate_offer_pdf(pdf_df, export_filename_base)
