@@ -416,8 +416,8 @@ def extract_positions_from_structured_excel(file_path):
             for row in range(header_row + 1, sheet.max_row + 1):
                 typ = str(sheet[f'A{row}'].value or "").strip().lower()
 
-                # Only extract rows marked as "Position"
-                if typ == "position":
+                # Only extract rows marked as "Position" (including variants like "Position (Ohne Gesamtpreis)")
+                if typ.startswith("position"):
                     ordnungszahl = sheet[f'B{row}'].value
                     kurztext = sheet[f'C{row}'].value
                     langtext = sheet[f'D{row}'].value
