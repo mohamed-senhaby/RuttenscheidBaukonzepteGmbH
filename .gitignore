@@ -1,6 +1,9 @@
 # Streamlit secrets
 .streamlit/secrets.toml
 
+# Data files
+Data/
+
 # Python
 __pycache__/
 *.py[cod]
