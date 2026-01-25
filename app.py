@@ -1791,6 +1791,12 @@ if not st.session_state.calculation_df.empty:
         # Calculate GP (Menge × EP)
         export_df['total_price'] = edited_df['quantity'] * edited_df['unit_price']
 
+        # --- TOTALS CALCULATION ---
+        total_netto = export_df['total_price'].sum()
+        total_mwst = total_netto * 0.19
+        total_brutto = total_netto * 1.19
+        # --- END TOTALS CALCULATION ---
+
         # Convert numeric columns to German-formatted text strings
         export_df['quantity'] = export_df['quantity'].apply(lambda x: format_german_number(x, 2))
         export_df['unit_price'] = export_df['unit_price'].apply(lambda x: format_german_number(x, 2))
@@ -1798,6 +1804,16 @@ if not st.session_state.calculation_df.empty:
 
         # Rename columns to German
         export_df.columns = ['Pos.', 'Leistungsbezeichnung', 'Menge', 'Einheit', 'EP netto (€)', 'GP netto (€)']
+
+        # --- ADD TOTALS TO DATAFRAME ---
+        # Add an empty row for spacing
+        export_df.loc[len(export_df)] = [''] * len(export_df.columns)
+
+        # Add total rows
+        export_df.loc[len(export_df)] = ['', 'Angebotssumme netto:', '', '=', '', f'{format_german_number(total_netto)} € netto']
+        export_df.loc[len(export_df)] = ['', 'Mehrwertsteuer', 'zzgl. 19,0%', '=', '', f'{format_german_number(total_mwst)} €']
+        export_df.loc[len(export_df)] = ['', 'Angebotssumme brutto', '', '=', '', f'{format_german_number(total_brutto)} € brutto']
+        # --- END ADD TOTALS ---
 
         # Write to Excel
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
@@ -1807,10 +1823,11 @@ if not st.session_state.calculation_df.empty:
             worksheet = writer.sheets['Kalkulation']
 
             # Clean up values and set as text
-            from openpyxl.styles import Alignment
+            from openpyxl.styles import Alignment, Font, Border, Side
             from openpyxl.cell.cell import TYPE_STRING
 
-            for row in range(2, len(export_df) + 2):
+            # Style the data rows
+            for row in range(2, len(export_df) - 2): # Stop before the total rows
                 # Menge (column C/3)
                 cell_c = worksheet.cell(row=row, column=3)
                 clean_value_c = str(cell_c.value).lstrip("'") if cell_c.value else ""
@@ -1832,13 +1849,33 @@ if not st.session_state.calculation_df.empty:
                 cell_f.data_type = TYPE_STRING
                 cell_f.alignment = Alignment(horizontal='right')
 
+            # --- STYLE TOTALS ---
+            last_row = worksheet.max_row
+            brutto_row_index = last_row
+            netto_row_index = last_row - 2
+
+            thin_top_border = Border(top=Side(style='thin'))
+
+            # Style Netto row and add border
+            for col_idx in range(1, worksheet.max_column + 1):
+                cell = worksheet.cell(row=netto_row_index, column=col_idx)
+                cell.border = thin_top_border
+
+            # Style Brutto row (bold) and add border
+            for col_idx in range(1, worksheet.max_column + 1):
+                cell = worksheet.cell(row=brutto_row_index, column=col_idx)
+                cell.font = Font(bold=True)
+                cell.border = thin_top_border
+            # --- END STYLE TOTALS ---
+
+
             # Adjust column widths
             worksheet.column_dimensions['A'].width = 12
             worksheet.column_dimensions['B'].width = 50
             worksheet.column_dimensions['C'].width = 15
-            worksheet.column_dimensions['D'].width = 10
+            worksheet.column_dimensions['D'].width = 10 
             worksheet.column_dimensions['E'].width = 18
-            worksheet.column_dimensions['F'].width = 18
+            worksheet.column_dimensions['F'].width = 20
 
         # Sanitize filename
         safe_filename = sanitize_filename(export_filename_base)
